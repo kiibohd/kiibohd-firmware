@@ -26,9 +26,15 @@ fn main() {
     //println!("cargo:rerun-if-changed=build.rs");
 
     // Read PID and HID from project.env
-    let projectfile = File::open("project.env");
+    let mut projectfile = match File::open("project.env") {
+        Ok(f) => f,
+        Err(e) => panic!("Can't read from project.env, err {}", e),
+    };
     let mut projectread = String::new();
-    Some(projectfile.unwrap().read_to_string(&mut projectread));
+    match projectfile.read_to_string(&mut projectread) {
+        Err(e) => panic!("File read failed with err {}", e),
+        Ok(f) => f,
+    };
 
     let mut bvid_rslt = "";
     let mut bpid_rslt = "";
@@ -42,7 +48,7 @@ fn main() {
                 .unwrap()
                 .checked_add(10)
                 .unwrap();
-            let end = curline.rfind("\"").unwrap();
+            let end = curline.rfind('\"').unwrap();
             bvid_rslt = &curline[strt..end];
         } else if curline.contains("BOOT_PID=\"") {
             let strt = curline
@@ -50,7 +56,7 @@ fn main() {
                 .unwrap()
                 .checked_add(10)
                 .unwrap();
-            let end = curline.rfind("\"").unwrap();
+            let end = curline.rfind('\"').unwrap();
             bpid_rslt = &curline[strt..end];
         } else if curline.contains("DEVICE_VID=\"") {
             let strt = curline
@@ -58,7 +64,7 @@ fn main() {
                 .unwrap()
                 .checked_add(12)
                 .unwrap();
-            let end = curline.rfind("\"").unwrap();
+            let end = curline.rfind('\"').unwrap();
             vid_rslt = &curline[strt..end];
         } else if curline.contains("DEVICE_PID=\"") {
             let strt = curline
@@ -66,7 +72,7 @@ fn main() {
                 .unwrap()
                 .checked_add(12)
                 .unwrap();
-            let end = curline.rfind("\"").unwrap();
+            let end = curline.rfind('\"').unwrap();
             pid_rslt = &curline[strt..end];
         }
     }
