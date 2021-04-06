@@ -27,8 +27,8 @@ fn main() {
 
     // Read PID and HID from project.env
     let mut projectfile = match File::open("project.env") {
-        Ok(f) => f,
         Err(e) => panic!("Can't read from project.env, err {}", e),
+        Ok(f) => f,
     };
     let mut projectread = String::new();
     match projectfile.read_to_string(&mut projectread) {
@@ -36,6 +36,7 @@ fn main() {
         Ok(f) => f,
     };
 
+    // Identify and store data from file into variables
     let mut bvid_rslt = "";
     let mut bpid_rslt = "";
     let mut vid_rslt = "";
@@ -108,7 +109,6 @@ fn main() {
         .define("BaseMap", "scancode_map")
         .define("DefaultMap", defmap)
         .define("PartialMaps", partmap)
-        // TODO - Store VIDs in a config file
         .define("VENDOR_ID", vid_rslt)
         .define("PRODUCT_ID", pid_rslt)
         .define("BOOT_VENDOR_ID", bvid_rslt)
