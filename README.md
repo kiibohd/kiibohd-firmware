@@ -110,7 +110,7 @@ As an alternative to running GDB/OpenOCD directly you can use the following step
 source [find interface/cmsis-dap.cfg]
 transport select swd
 source [find target/at91sam4sXX.cfg]
-adapter speed 30000
+adapter speed 20000
 ```
 3. Within CLion open the Run/Debug Configurations dialog and add a new ```OpenOCD Download & Run``` configuration.
 4. For ```Target``` create a dummy build target. 
