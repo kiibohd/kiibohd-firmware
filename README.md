@@ -101,6 +101,31 @@ monitor soft_reset_halt
 ```
 which soft reset the processor and halt at the beginning so you can load any breakpoints you want before continuing.
 
+### Debugging in CLion
+As an alternative to running GDB/OpenOCD directly you can use the following steps to configure debug within CLion.
+
+1. Run through the previous steps to get the gdb-server and gdb-client working including installing all dependencies. 
+2. Create an OpenOCD configuration file containing the following: 
+```yaml
+source [find interface/cmsis-dap.cfg]
+transport select swd
+source [find target/at91sam4sXX.cfg]
+adapter speed 30000
+```
+3. Within CLion open the Run/Debug Configurations dialog and add a new ```OpenOCD Download & Run``` configuration.
+4. For ```Target``` create a dummy build target. 
+5. Set ```Executable``` to the debug gemini executable found in ```kiibohd-firmware/target/thumbv7em-none-eabi/debug/gemini```.
+6. Leave GDB set to use ```Bundled GDB multiarch```.
+7. Set the Board config file to point to the OpenOCD config file you previously created.
+8. Leave the fields GDB Port (3333), Telnet Port (4444), Download (Updated Only), and Reset (Init), values as they are.
+9. In the Before launch field add a new entry for Run External tool, setting Program to ```cargo```,  Arguments to ```build --target thumbv7em-none-eabi``` and Working directory to the full path to the ```kiibohd-firmware/hexgears/gemini``` folder.
+10. Once created use this and remove the existing Build target from the Before launch field as it is no longer needed.
+11. Save your changes.
+12. You should now have a Run/Debug Configuration that when you run Debug will allow you to debug within CLion. 
+
+The above steps have been adapted from the following discussion:
+* https://users.rust-lang.org/t/embedded-rust-how-can-one-debug-stm32-openocd-from-clion-intellij-rust/19062/4
+ 
 
 ## License
 
