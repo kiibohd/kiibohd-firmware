@@ -31,7 +31,7 @@ fn main() {
         .write_all(memory_x.as_bytes())
         .unwrap();
     println!("cargo:rustc-link-search={}", out.display());
-    println!("cargo:rerun-if-changed=memory.x");
+    println!("cargo:rerun-if-changed={}", linker_file.display());
 
     // Gather useful data from project.env
     let bvid_rslt = env::var("BOOT_VID").unwrap();
