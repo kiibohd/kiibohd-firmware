@@ -41,6 +41,9 @@ fn main() {
     let usb_manufacturer = env::var("USB_MANUFACTURER").unwrap();
     let usb_product = env::var("USB_PRODUCT").unwrap();
     let usb_serial_chip = env::var("USB_SERIAL_CHIP").unwrap();
+    let hidio_device_name = env::var("HIDIO_DEVICE_NAME").unwrap();
+    let hidio_device_vendor = env::var("HIDIO_DEVICE_VENDOR").unwrap();
+    let hidio_firmware_name = env::var("HIDIO_FIRMWARE_NAME").unwrap();
 
     println!("cargo:rustc-env=BOOT_VID={}", bvid_rslt);
     println!("cargo:rustc-env=BOOT_PID={}", bpid_rslt);
@@ -49,6 +52,9 @@ fn main() {
     println!("cargo:rustc-env=USB_MANUFACTURER={}", usb_manufacturer);
     println!("cargo:rustc-env=USB_PRODUCT={}", usb_product);
     println!("cargo:rustc-env=USB_SERIAL_CHIP={}", usb_serial_chip);
+    println!("cargo:rustc-env=HIDIO_DEVICE_NAME={}", hidio_device_name);
+    println!("cargo:rustc-env=HIDIO_DEVICE_VENDOR={}", hidio_device_vendor);
+    println!("cargo:rustc-env=HIDIO_FIRMWARE_NAME={}", hidio_firmware_name);
 
     // Generate Rust code from KLL files
     let mut filestore = Filestore::new();

@@ -88,6 +88,12 @@ mod app {
     const USB_MANUFACTURER: &str = "Unknown";
     #[from_env]
     const USB_PRODUCT: &str = "Kiibohd";
+    #[from_env]
+    const HIDIO_DEVICE_NAME: &str = "Kiibohd";
+    #[from_env]
+    const HIDIO_DEVICE_VENDOR: &str = "Unknown";
+    #[from_env]
+    const HIDIO_FIRMWARE_NAME: &str = "kiibohd-firmware";
 
     // ----- Types -----
 
@@ -131,11 +137,15 @@ mod app {
 
     impl<const H: usize> KiibohdCommandInterface<H> for HidioInterface<H> {
         fn h0001_device_name(&self) -> Option<&str> {
-            Some("Gemini Dusk/Dawn")
+            Some(HIDIO_DEVICE_NAME)
+        }
+
+        fn h0001_device_vendor(&self) -> Option<&str> {
+            Some(HIDIO_DEVICE_VENDOR)
         }
 
         fn h0001_firmware_name(&self) -> Option<&str> {
-            Some("kiibohd-firmware")
+            Some(HIDIO_FIRMWARE_NAME)
         }
     }
 
