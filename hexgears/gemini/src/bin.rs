@@ -39,6 +39,7 @@ mod app {
 
     use gemini::{
         hal::{
+            chipid::ChipId,
             clock::{ClockController, MainClock, SlowClock},
             efc::Efc,
             gpio::*,
@@ -131,17 +132,47 @@ mod app {
 
     // ----- Structs -----
 
-    pub struct HidioInterface<const H: usize> {}
+    pub struct HidioInterface<const H: usize> {
+        mcu: Option<String<12>>,
+        serial: Option<String<126>>,
+    }
 
     impl<const H: usize> HidioInterface<H> {
-        fn new() -> Self {
-            Self {}
+        fn new(chip: &ChipId, serial: Option<String<126>>) -> Self {
+            let mcu = if let Some(model) = chip.model() {
+                let mut mcu: String<12> = String::new();
+                if write!(mcu, "{:?}", model).is_ok() {
+                    Some(mcu)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            Self { mcu, serial }
         }
     }
 
     impl<const H: usize> KiibohdCommandInterface<H> for HidioInterface<H> {
         fn h0001_device_name(&self) -> Option<&str> {
             Some(HIDIO_DEVICE_NAME)
+        }
+
+        fn h0001_device_mcu(&self) -> Option<&str> {
+            if let Some(mcu) = &self.mcu {
+                Some(mcu)
+            } else {
+                None
+            }
+        }
+
+        fn h0001_device_serial_number(&self) -> Option<&str> {
+            if let Some(serial) = &self.serial {
+                Some(serial)
+            } else {
+                None
+            }
         }
 
         fn h0001_device_vendor(&self) -> Option<&str> {
@@ -205,6 +236,10 @@ mod app {
         cx.core.DWT.enable_cycle_counter();
 
         defmt::info!(">>>> Initializing <<<<");
+
+        // Determine which chip is running
+        let chip = ChipId::new(cx.device.CHIPID);
+        defmt::info!("MCU: {:?}", chip.model());
 
         // Setup main and slow clocks
         defmt::trace!("Clock initialization");
@@ -287,7 +322,7 @@ mod app {
                 HidIoCommandId::GetInfo,
                 HidIoCommandId::TestPacket,
             ],
-            HidioInterface::<MESSAGE_LEN>::new(),
+            HidioInterface::<MESSAGE_LEN>::new(&chip, Some(cx.local.serial_number.clone())),
         )
         .unwrap();
 
