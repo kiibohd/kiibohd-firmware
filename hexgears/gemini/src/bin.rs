@@ -225,9 +225,10 @@ mod app {
     fn init(mut cx: init::Context) -> (Shared, Local, init::Monotonics) {
         // Fix vector table (Bootloader bug?)
         //unsafe { cx.core.SCB.vtor.write(0x406000) };
-        //TODO
+        //TODO - cortex-m-rt v0.8 set-vtor feature
         // Fix stack pointer (Bootloader bug?)
         //TODO - This is not safe, should be done another way (maybe not necessary?)
+        //TODO - cortex-m-rt v0.8 set-sp feature
         //let sp = 0x20020000;
         //unsafe { asm!("msr MSP, {}", in(reg) sp) };
 
@@ -236,6 +237,10 @@ mod app {
         cx.core.DWT.enable_cycle_counter();
 
         defmt::info!(">>>> Initializing <<<<");
+
+        // Show processor registers
+        defmt::trace!("MSP: {:#010x}", cortex_m::register::msp::read());
+        defmt::trace!("PSP: {:#010x}", cortex_m::register::psp::read());
 
         // Determine which chip is running
         let chip = ChipId::new(cx.device.CHIPID);
