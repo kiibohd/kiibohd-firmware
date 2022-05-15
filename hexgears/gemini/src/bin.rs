@@ -1,4 +1,4 @@
-// Copyright 2021 Jacob Alexander
+// Copyright 2021-2022 Jacob Alexander
 //
 // Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
 // http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
@@ -94,6 +94,10 @@ mod app {
     const HIDIO_DEVICE_VENDOR: &str = "Unknown";
     #[from_env]
     const HIDIO_FIRMWARE_NAME: &str = "kiibohd-firmware";
+    #[from_env]
+    const VERGEN_GIT_SEMVER: &str = "N/A";
+    #[from_env]
+    const VERGEN_GIT_COMMIT_COUNT: &str = "0";
 
     // ----- Types -----
 
@@ -146,6 +150,10 @@ mod app {
 
         fn h0001_firmware_name(&self) -> Option<&str> {
             Some(HIDIO_FIRMWARE_NAME)
+        }
+
+        fn h0001_firmware_version(&self) -> Option<&str> {
+            Some(VERGEN_GIT_SEMVER)
         }
     }
 
@@ -310,7 +318,7 @@ mod app {
             .product(USB_PRODUCT)
             .supports_remote_wakeup(true) // TODO Add support
             .serial_number(cx.local.serial_number)
-            .device_release(0x1234) // TODO Get git revision info (sequential commit number)
+            .device_release(VERGEN_GIT_COMMIT_COUNT.parse().unwrap())
             .build();
 
         // TODO This should only really be run when running with a debugger for development

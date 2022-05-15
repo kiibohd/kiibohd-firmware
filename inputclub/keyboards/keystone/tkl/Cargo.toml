@@ -43,6 +43,7 @@ features = ["atsam4s8b", "usb", "defmt-default"]
 [build-dependencies]
 dotenv = "0.15"
 kll-compiler = { git = "https://github.com/kiibohd/kiibohd-core.git" }
+vergen = { git = "https://github.com/haata/vergen", version = "7.0", default-features = false, features = ["git"] }
 
 [features]
 default = [

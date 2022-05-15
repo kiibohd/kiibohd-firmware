@@ -56,6 +56,11 @@ fn main() {
     println!("cargo:rustc-env=HIDIO_DEVICE_VENDOR={}", hidio_device_vendor);
     println!("cargo:rustc-env=HIDIO_FIRMWARE_NAME={}", hidio_firmware_name);
 
+    // Generate vergen info
+    let mut config = vergen::Config::default();
+    *config.git_mut().semver_dirty_mut() = Some("-dirty");
+    vergen::vergen(config).unwrap();
+
     // Generate Rust code from KLL files
     let mut filestore = Filestore::new();
 
