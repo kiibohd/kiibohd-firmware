@@ -23,12 +23,12 @@ cortex-m-rt = { version = "0.7" }
 cortex-m-rtic = "1.0.0"
 defmt = "0.3"
 defmt-rtt = "0.3"
-embedded-hal = "0.2.5"
-embedded-time = "0.10.1"
+embedded-hal = "0.2.7"
 heapless = "0.7"
-kiibohd-hid-io = { git = "https://github.com/kiibohd/kiibohd-core.git" }
-kiibohd-keyscanning = { git = "https://github.com/kiibohd/kiibohd-core.git" }
-kiibohd-usb = { git = "https://github.com/kiibohd/kiibohd-core.git", default-features = false, features = ["hidio", "defmt-default"] }
+kiibohd-hid-io = { version = "0.1.0", git = "https://github.com/kiibohd/kiibohd-core.git" }
+kiibohd-keyscanning = { version = "0.1.0", git = "https://github.com/kiibohd/kiibohd-core.git", features = ["kll-core"] }
+kiibohd-usb = { version = "0.1.0", git = "https://github.com/kiibohd/kiibohd-core.git", default-features = false, features = ["hidio", "defmt-default", "kll-core"] }
+kll-core = { version = "0.1.0", git = "https://github.com/kiibohd/kiibohd-core.git" }
 nb = "~0.1"
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 paste = "1.0"

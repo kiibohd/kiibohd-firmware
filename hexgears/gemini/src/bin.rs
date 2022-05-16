@@ -5,8 +5,6 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-// TODO Remove this
-#![allow(clippy::inconsistent_struct_constructor)]
 #![no_std]
 #![no_main]
 
@@ -34,7 +32,6 @@ mod app {
     use heapless::spsc::{Producer, Queue};
     use heapless::String;
     use kiibohd_hid_io::*;
-    use kiibohd_keyscanning::KeyEvent;
     use kiibohd_usb::HidCountryCode;
 
     use gemini::{
@@ -59,27 +56,39 @@ mod app {
             watchdog::Watchdog,
             ToggleableOutputPin,
         },
-        Pins,
+        kll, Pins,
     };
 
-    // ----- Defines -----
+    // ----- Sizes -----
 
     const BUF_CHUNK: usize = 64;
     const ID_LEN: usize = 10;
     const RX_BUF: usize = 8;
     const SERIALIZATION_LEN: usize = 277;
     const TX_BUF: usize = 8;
+
     const CSIZE: usize = 17; // Number of columns
     const RSIZE: usize = 6; // Number of rows
     const MSIZE: usize = RSIZE * CSIZE; // Total matrix size
 
+    const CTRL_QUEUE_SIZE: usize = 2;
     const KBD_QUEUE_SIZE: usize = 2;
     const MOUSE_QUEUE_SIZE: usize = 2;
-    const CTRL_QUEUE_SIZE: usize = 2;
 
     const SCAN_PERIOD_US: u32 = 1000 / CSIZE as u32; // Scan all strobes within 1 ms (1000 Hz) for USB
     const DEBOUNCE_US: u32 = 5000; // 5 ms TODO Tuning
     const IDLE_MS: u32 = 600_000; // 600 seconds TODO Tuning
+
+    // KLL Constants
+    // TODO - Tune
+    const LAYOUT_SIZE: usize = 256;
+    const MAX_ACTIVE_LAYERS: usize = 2;
+    const MAX_ACTIVE_TRIGGERS: usize = 2;
+    const MAX_LAYERS: usize = 2;
+    const MAX_LAYER_STACK_CACHE: usize = 2;
+    const MAX_LAYER_LOOKUP_SIZE: usize = 2;
+    const MAX_OFF_STATE_LOOKUP: usize = 2;
+    const STATE_SIZE: usize = 2;
 
     #[from_env]
     const VID: u16 = 0x1c11;
@@ -128,6 +137,18 @@ mod app {
         DEBOUNCE_US,
         IDLE_MS,
     >;
+    type LayerLookup = kll_core::layout::LayerLookup<'static, LAYOUT_SIZE>;
+    type LayerState = kll_core::layout::LayerState<
+        'static,
+        LAYOUT_SIZE,
+        STATE_SIZE,
+        MAX_LAYERS,
+        MAX_ACTIVE_LAYERS,
+        MAX_ACTIVE_TRIGGERS,
+        MAX_LAYER_STACK_CACHE,
+        MAX_OFF_STATE_LOOKUP,
+    >;
+
     type UsbDevice = usb_device::device::UsbDevice<'static, UdpBus>;
 
     // ----- Structs -----
@@ -193,13 +214,14 @@ mod app {
     //
     #[shared]
     struct Shared {
+        ctrl_producer: Producer<'static, kiibohd_usb::CtrlState, CTRL_QUEUE_SIZE>,
         debug_led: Pb0<Output<PushPull>>,
         hidio_intf: HidioCommandInterface,
         kbd_producer: Producer<'static, kiibohd_usb::KeyState, KBD_QUEUE_SIZE>,
+        layer_state: LayerState,
         matrix: Matrix,
         rtt: RealTimeTimer,
         tcc0: TimerCounterChannel<TC0, 0>,
-        test: Option<bool>,
         usb_dev: UsbDevice,
         usb_hid: HidInterface,
         wdt: Watchdog,
@@ -319,6 +341,21 @@ mod app {
         let mut matrix = Matrix::new(cols, rows).unwrap();
         matrix.next_strobe().unwrap(); // Initial strobe
 
+        // Setup kll-core
+        let loop_condition_lookup: &[u32] = &[0]; // TODO: Use KLL Compiler
+
+        // Load datastructures into kll-core
+        let layer_lookup = LayerLookup::new(
+            kll::LAYER_LOOKUP,
+            kll::TRIGGER_GUIDES,
+            kll::RESULT_GUIDES,
+            kll::TRIGGER_RESULT_MAPPING,
+            loop_condition_lookup,
+        );
+
+        // Initialize LayerState for kll-core
+        let layer_state = LayerState::new(layer_lookup, 0);
+
         // Setup HID-IO interface
         defmt::trace!("HID-IO Interface initialization");
         let hidio_intf = HidioCommandInterface::new(
@@ -335,7 +372,7 @@ mod app {
         defmt::trace!("UDP initialization");
         let (kbd_producer, kbd_consumer) = cx.local.kbd_queue.split();
         let (_mouse_producer, _mouse_consumer) = cx.local.mouse_queue.split();
-        let (_ctrl_producer, ctrl_consumer) = cx.local.ctrl_queue.split();
+        let (ctrl_producer, ctrl_consumer) = cx.local.ctrl_queue.split();
         let udp_bus = UdpBus::new(
             cx.device.UDP,
             clocks.peripheral_clocks.udp,
@@ -373,8 +410,8 @@ mod app {
         let mut tcc0 = tc0_chs.ch0;
         tcc0.clock_input(ClockSource::MckDiv128);
         tcc0.start((SCAN_PERIOD_US * 1000).nanoseconds());
-        tcc0.enable_interrupt();
         defmt::trace!("TCC0 started");
+        tcc0.enable_interrupt();
 
         // Setup secondary timer (used for watchdog, activity led and sleep related functionality)
         let mut rtt = RealTimeTimer::new(cx.device.RTT, 3, false);
@@ -384,13 +421,14 @@ mod app {
 
         (
             Shared {
+                ctrl_producer,
                 debug_led: pins.debug_led,
                 hidio_intf,
                 kbd_producer,
+                layer_state,
                 matrix,
                 rtt,
                 tcc0,
-                test: Some(true),
                 usb_dev,
                 usb_hid,
                 wdt,
@@ -404,36 +442,35 @@ mod app {
     /// High-priority scheduled tasks as consistency is more important than speed for scanning
     /// key states
     /// Scans one strobe at a time
-    #[task(binds = TC0, shared = [matrix, tcc0], priority = 13)]
+    #[task(priority = 13, binds = TC0, shared = [hidio_intf, layer_state, matrix, tcc0])]
     fn tc0(mut cx: tc0::Context) {
         cx.shared.tcc0.lock(|w| w.clear_interrupt_flags());
 
         let process_macros = cx.shared.matrix.lock(|matrix| {
-            // Scan one strobe (strobes have already been enabled and allowed to settle)
-            if let Ok((reading, strobe)) = matrix.sense::<Infallible>() {
-                for (i, entry) in reading.iter().enumerate() {
-                    match entry {
-                        KeyEvent::On {
-                            cycles_since_state_change,
-                        } => {
-                            if *cycles_since_state_change == 0 {
-                                defmt::trace!("Reading: {} {}", strobe * i, entry);
-                            }
-                        }
-                        KeyEvent::Off {
-                            idle: _,
-                            cycles_since_state_change,
-                        } => {
-                            if *cycles_since_state_change == 0 {
-                                defmt::trace!("Reading: {} {}", strobe * i, entry);
-                            }
+            cx.shared.layer_state.lock(|layer_state| {
+                // Scan one strobe (strobes have already been enabled and allowed to settle)
+                if let Ok((reading, strobe)) = matrix.sense::<Infallible>() {
+                    for (i, entry) in reading.iter().enumerate() {
+                        for event in entry.trigger_event(strobe * RSIZE + i) {
+                            let hidio_event = HidIoEvent::TriggerEvent(event);
+
+                            // Enqueue KLL trigger event
+                            let ret = layer_state.process_trigger::<MAX_LAYER_LOOKUP_SIZE>(event);
+                            assert!(ret.is_ok(), "Failed to enqueue: {:?} - {:?}", event, ret);
+
+                            // Enqueue HID-IO trigger event
+                            cx.shared.hidio_intf.lock(|hidio_intf| {
+                                if let Err(err) = hidio_intf.process_event(hidio_event) {
+                                    defmt::error!("Hidio TriggerEvent Error: {:?}", err);
+                                }
+                            });
                         }
                     }
                 }
-                // TODO - Do something with reading
-            }
-            // Strobe next column
-            matrix.next_strobe::<Infallible>().unwrap() == 0
+
+                // Strobe next column
+                matrix.next_strobe::<Infallible>().unwrap() == 0
+            })
         });
 
         // If a full matrix scanning cycle has finished, process macros
@@ -444,7 +481,7 @@ mod app {
 
     /// Activity tick
     /// Used visually determine MCU status
-    #[task(binds = RTT, shared = [debug_led, rtt, wdt])]
+    #[task(priority = 1, binds = RTT, shared = [debug_led, rtt, wdt])]
     fn rtt(mut cx: rtt::Context) {
         cx.shared.rtt.lock(|w| w.clear_interrupt_flags());
 
@@ -459,10 +496,53 @@ mod app {
     /// Macro Processing Task
     /// Handles incoming key scan triggers and turns them into results (actions and hid events)
     /// Has a lower priority than keyscanning to schedule around it.
-    #[task(priority = 10)]
-    fn macro_process(_cx: macro_process::Context) {
-        // TODO
+    #[task(priority = 10, shared = [ctrl_producer, hidio_intf, kbd_producer, layer_state, matrix])]
+    fn macro_process(mut cx: macro_process::Context) {
+        cx.shared.layer_state.lock(|layer_state| {
+            // Confirm off-state lookups
+            cx.shared.matrix.lock(|matrix| {
+                layer_state.process_off_state_lookups::<MAX_LAYER_LOOKUP_SIZE>(&|index| {
+                    matrix.generate_event(index).unwrap().trigger_event(index)
+                });
+            });
 
+            // Finalize triggers to generate CapabilityRun events
+            for cap_run in layer_state.finalize_triggers::<MAX_LAYER_LOOKUP_SIZE>() {
+                match cap_run {
+                    kll_core::CapabilityRun::NoOp { .. } => {}
+                    kll_core::CapabilityRun::HidKeyboard { .. }
+                    | kll_core::CapabilityRun::HidKeyboardState { .. } => {
+                        cx.shared.kbd_producer.lock(|kbd_producer| {
+                            kiibohd_usb::enqueue_keyboard_event(cap_run, kbd_producer).unwrap();
+                        })
+                    }
+                    kll_core::CapabilityRun::HidProtocol { .. } => {}
+                    kll_core::CapabilityRun::HidConsumerControl { .. }
+                    | kll_core::CapabilityRun::HidSystemControl { .. } => {
+                        cx.shared.ctrl_producer.lock(|ctrl_producer| {
+                            kiibohd_usb::enqueue_ctrl_event(cap_run, ctrl_producer).unwrap();
+                        })
+                    }
+                    /*
+                    kll_core::CapabilityRun::McuFlashMode { .. } => {}
+                    kll_core::CapabilityRun::HidioOpenUrl { .. }
+                    | kll_core::CapabilityRun::HidioUnicodeString { .. }
+                    | kll_core::CapabilityRun::HidioUnicodeState { .. } => {}
+                    kll_core::CapabilityRun::LayerClear { .. }
+                    | kll_core::CapabilityRun::LayerRotate { .. }
+                    | kll_core::CapabilityRun::LayerState { .. } => {}
+                    */
+                    _ => {
+                        panic!("{:?} is unsupported by this keyboard", cap_run);
+                    }
+                }
+            }
+
+            // Next time iteration
+            layer_state.increment_time();
+        });
+
+        // Schedule USB processing
         if usb_process::spawn().is_err() {
             defmt::warn!("Could not schedule usb_process");
         }
@@ -471,46 +551,27 @@ mod app {
     /// USB Outgoing Events Task
     /// Sends outgoing USB HID events generated by the macro_process task
     /// Has a lower priority than keyscanning to schedule around it.
-    #[task(local = [], shared = [usb_hid, test, kbd_producer], priority = 10)]
-    fn usb_process(_cx: usb_process::Context) {
-        // XXX Test code for press then release of USB A key
-        /*
-        let mut test = cx.shared.test;
-        let mut kbd_producer = cx.shared.kbd_producer;
+    #[task(priority = 11, shared = [usb_hid])]
+    fn usb_process(cx: usb_process::Context) {
         let mut usb_hid = cx.shared.usb_hid;
-        test.lock(|test| {
-            kbd_producer.lock(|kbd_producer| {
-                if test.take().unwrap() {
-                    test.replace(false);
-                    kbd_producer
-                        .enqueue(kiibohd_usb::KeyState::Press(0x04))
-                        .unwrap();
-                } else {
-                    test.replace(true);
-                    kbd_producer
-                        .enqueue(kiibohd_usb::KeyState::Release(0x04))
-                        .unwrap();
-                }
-            });
-        });
         usb_hid.lock(|usb_hid| {
+            // Commit USB events
             usb_hid.push();
         });
-        */
     }
 
     /// ISSI I2C0 Interrupt
-    #[task(binds = TWI0, priority = 12)]
+    #[task(priority = 12, binds = TWI0)]
     fn twi0(_: twi0::Context) {
         //unsafe { TWI0_Handler() };
     }
 
     /// ISSI I2C1 Interrupt
-    #[task(binds = TWI1, priority = 12)]
+    #[task(priority = 12, binds = TWI1)]
     fn twi1(_: twi1::Context) {}
 
     /// USB Device Interupt
-    #[task(binds = UDP, priority = 14, shared = [hidio_intf, usb_dev, usb_hid])]
+    #[task(priority = 14, binds = UDP, shared = [hidio_intf, usb_dev, usb_hid])]
     fn udp(cx: udp::Context) {
         let mut usb_dev = cx.shared.usb_dev;
         let mut usb_hid = cx.shared.usb_hid;
