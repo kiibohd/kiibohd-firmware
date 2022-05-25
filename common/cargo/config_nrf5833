@@ -1,0 +1,32 @@
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+runner = "probe-run --chip NRF52833 --speed 20000"
+rustflags = [
+   "-C", "linker=flip-link",
+   "-C", "link-arg=-Tlink.x",
+   "-C", "link-arg=-Tdefmt.x",
+   # This is needed if your flash or ram addresses are not aligned to 0x10000 in memory.x
+   # See https://github.com/rust-embedded/cortex-m-quickstart/pull/95
+   "-C", "link-arg=--nmagic",
+]
+
+# Removing default compilation target as it messes with xtask and other system build tools
+#[build]
+#target = "thumbv7em-none-eabi"
+
+[alias]
+bb = "build --target thumbv7em-none-eabihf"
+brb = "build --target thumbv7em-none-eabihf --release"
+rb = "run --target thumbv7em-none-eabihf"
+rrb = "run --target thumbv7em-none-eabihf --release"
+xtask = "run --package xtask --"
+nmb = "nm --target thumbv7em-none-eabihf"
+objdumpb = "objdump --target thumbv7em-none-eabihf -- --disassemble --no-show-raw-insn"
+
+[env]
+CARGO_TARGET = "thumbv7em-none-eabihf"
+OPENOCD_INTERFACE = "cmsis-dap"
+OPENOCD_TARGET = "nrf52"
+SWD_SPEED = "20000" # kHz
+
+[unstable]
+features = ["host_dep"]

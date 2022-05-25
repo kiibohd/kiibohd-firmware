@@ -3,6 +3,7 @@ members = [
     "common/xtask",
     "hexgears/gemini",
     "inputclub/keyboards/keystone/tkl",
+    "inputclub/keyboards/wz",
 ]
 
 # XXX Important when using gdb XXX

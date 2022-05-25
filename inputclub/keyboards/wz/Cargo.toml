@@ -9,13 +9,6 @@ categories = ["embedded", "hardware-support", "no-std"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/kiibohd/kiibohd-firmware"
 
-[lib]
-path = "src/lib.rs"
-
-[[bin]]
-name = "wz"
-path = "src/bin.rs"
-
 [dependencies]
 const_env = "0.1"
 cortex-m = "0.7"
@@ -33,11 +26,12 @@ nb = "~0.1"
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 paste = "1.0"
 
-[dependencies.atsam4-hal]
-git = "https://github.com/haata/atsam4-hal.git"
-version = "0.1.15"
-default-features = false
-features = ["atsam4s8b", "usb", "defmt-default"]
+panic-semihosting = "0.5.3"
+cortex-m-semihosting = "0.3.5"
+
+[dependencies.nrf52833-hal]
+git = "https://github.com/haata/nrf-hal.git"
+version = "0.15.0"
 
 [build-dependencies]
 dotenv = "0.15"

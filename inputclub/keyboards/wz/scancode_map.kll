@@ -79,7 +79,7 @@ S61 : U"PageDown";
 
 # Bottom Row (62-71)
 S62 : U"LCtrl";
-S63 : U"LGui";
+S63 : U"LGUI";
 S64 : U"LAlt";
 S65 : U"Space";
 S66 : U"RAlt";
