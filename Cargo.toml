@@ -7,9 +7,13 @@ members = [
 ]
 
 [patch.crates-io]
-#embassy = { git = "https://github.com/embassy-rs/embassy" }
+kll-core = { path = "../kiibohd-core/kll-core" }
+kll-hid = { path = "../kiibohd-core/kll-hid" }
+kiibohd-usb = { path = "../kiibohd-core/kiibohd-usb" }
+kiibohd-hid-io = { path = "../kiibohd-core/kiibohd-hid-io" }
+embassy = { git = "https://github.com/embassy-rs/embassy" }
 #embassy-nrf = { git = "https://github.com/embassy-rs/embassy" }
-#embassy-macros = { git = "https://github.com/embassy-rs/embassy" }
+embassy-macros = { git = "https://github.com/embassy-rs/embassy" }
 
 # XXX Important when using gdb XXX
 # NOTE: Comment this section out when using gdb for a better experience
