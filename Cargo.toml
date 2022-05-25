@@ -6,6 +6,11 @@ members = [
     "inputclub/keyboards/wz",
 ]
 
+[patch.crates-io]
+#embassy = { git = "https://github.com/embassy-rs/embassy" }
+#embassy-nrf = { git = "https://github.com/embassy-rs/embassy" }
+#embassy-macros = { git = "https://github.com/embassy-rs/embassy" }
+
 # XXX Important when using gdb XXX
 # NOTE: Comment this section out when using gdb for a better experience
 #       Will increase binary size considerably though.

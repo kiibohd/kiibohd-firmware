@@ -23,11 +23,11 @@ kiibohd-keyscanning = { version = "0.1.0", git = "https://github.com/kiibohd/kii
 kiibohd-usb = { version = "0.1.0", git = "https://github.com/kiibohd/kiibohd-core.git", default-features = false, features = ["hidio", "defmt-default", "kll-core"] }
 kll-core = { version = "0.1.0", git = "https://github.com/kiibohd/kiibohd-core.git" }
 nb = "~0.1"
+#nrf-softdevice = { version = "0.1.0", git = "https://github.com/embassy-rs/nrf-softdevice.git", default-features = false, features = ["nrf52833", "s113", "ble-peripheral", "ble-gatt"] }
+#nrf-softdevice-defmt-rtt = { version = "0.1.0", git = "https://github.com/embassy-rs/nrf-softdevice.git" }
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 paste = "1.0"
-
-panic-semihosting = "0.5.3"
-cortex-m-semihosting = "0.3.5"
+usb-device = "0.2.7"
 
 [dependencies.nrf52833-hal]
 git = "https://github.com/haata/nrf-hal.git"
