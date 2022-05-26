@@ -220,7 +220,7 @@ mod app {
         //rtt: RealTimeTimer,
         //tcc0: TimerCounterChannel<TC0, 0>,
         usb_dev: UsbDevice,
-        //usb_hid: HidInterface,
+        usb_hid: HidInterface,
         //wdt: Watchdog,
     }
 
@@ -374,7 +374,6 @@ mod app {
         let (ctrl_producer, ctrl_consumer) = cx.local.ctrl_queue.split();
         *cx.local.usb_bus = Some(Usbd::new(UsbPeripheral::new(cx.device.USBD, clocks)));
         let usb_bus = cx.local.usb_bus.as_ref().unwrap();
-        /* TODO
         let usb_hid = HidInterface::new(
             usb_bus,
             HidCountryCode::NotSupported,
@@ -382,7 +381,6 @@ mod app {
             //mouse_consumer,
             ctrl_consumer,
         );
-        */
         let usb_dev = UsbDeviceBuilder::new(usb_bus, UsbVidPid(VID, PID))
             .manufacturer(USB_MANUFACTURER)
             .max_packet_size_0(64)
@@ -435,7 +433,7 @@ mod app {
                 //rtt,
                 //tcc0,
                 usb_dev,
-                //usb_hid,
+                usb_hid,
                 //wdt,
             },
             Local {},
