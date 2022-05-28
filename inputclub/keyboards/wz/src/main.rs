@@ -25,11 +25,18 @@ mod kll {
 // RTIC requires that unused interrupts are declared in an extern block when
 // using software tasks; these free interrupts will be used to dispatch the
 // software tasks.
-#[app(device = crate::hal::pac)]
+// See:
+// <https://infocenter.nordicsemi.com/index.jsp?topic=%2Fsds_s113%2FSDS%2Fs1xx%2Fsd_mgr%2Fsd_enable_disable.html>
+// for reserved peripherals
+// See: <https://github.com/nrf-rs/nrf-pacs/blob/master/pacs/nrf52833-pac/src/lib.rs> for a list of
+// interrupts
+#[app(device = crate::hal::pac, peripherals = true, dispatchers = [SWI0_EGU0, SWI2_EGU2, SWI3_EGU3, SWI4_EGU4, QDEC, NFCT, I2S])]
 mod app {
     use const_env::from_env;
-    use core::convert::Infallible;
     use core::fmt::Write;
+    use embedded_hal::{
+        timer::CountDown,
+    };
     use heapless::spsc::{Producer, Queue};
     use heapless::String;
     use kiibohd_hid_io::*;
@@ -38,10 +45,15 @@ mod app {
         bus::UsbBusAllocator,
         device::{UsbDeviceBuilder, UsbVidPid},
     };
+    use void::Void;
 
     use crate::hal::{
         clocks::{self, Clocks},
-        pac::USBD,
+        gpio::{self, Input, Level, Output, Pin, PullDown, PushPull},
+        pac::{
+            TIMER1,
+        },
+        timer::{Timer, Periodic},
         usbd::{UsbPeripheral, Usbd},
     };
 
@@ -53,8 +65,8 @@ mod app {
     const SERIALIZATION_LEN: usize = 277;
     const TX_BUF: usize = 8;
 
-    const CSIZE: usize = 17; // Number of columns
-    const RSIZE: usize = 6; // Number of rows
+    const CSIZE: usize = 16; // Number of columns
+    const RSIZE: usize = 5; // Number of rows
     const MSIZE: usize = RSIZE * CSIZE; // Total matrix size
 
     const CTRL_QUEUE_SIZE: usize = 2;
@@ -70,7 +82,7 @@ mod app {
     // TODO - Tune
     const LAYOUT_SIZE: usize = 256;
     const MAX_ACTIVE_LAYERS: usize = 2;
-    const MAX_ACTIVE_TRIGGERS: usize = 2;
+    const MAX_ACTIVE_TRIGGERS: usize = 32;
     const MAX_LAYERS: usize = 2;
     const MAX_LAYER_STACK_CACHE: usize = 2;
     const MAX_LAYER_LOOKUP_SIZE: usize = 2;
@@ -116,11 +128,9 @@ mod app {
         SERIALIZATION_LEN,
         ID_LEN,
     >;
-    // TODO - GPIO
-    /*
     type Matrix = kiibohd_keyscanning::Matrix<
-        PioX<Output<PushPull>>,
-        PioX<Input<PullDown>>,
+        Pin<Output<PushPull>>,
+        Pin<Input<PullDown>>,
         CSIZE,
         RSIZE,
         MSIZE,
@@ -128,7 +138,6 @@ mod app {
         DEBOUNCE_US,
         IDLE_MS,
     >;
-    */
     type LayerLookup = kll_core::layout::LayerLookup<'static, LAYOUT_SIZE>;
     type LayerState = kll_core::layout::LayerState<
         'static,
@@ -146,28 +155,12 @@ mod app {
     // ----- Structs -----
 
     pub struct HidioInterface<const H: usize> {
-        mcu: Option<String<12>>,
+        mcu: Option<String<8>>,
         serial: Option<String<126>>,
     }
 
     impl<const H: usize> HidioInterface<H> {
-        fn new(serial: Option<String<126>>) -> Self {
-            /*
-            let mcu = if let Some(model) = chip.model() {
-                let mut mcu: String<12> = String::new();
-                if write!(mcu, "{:?}", model).is_ok() {
-                    Some(mcu)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            */
-            // TODO
-            let mcu: String<12> = String::from("TODO");
-            let mcu = Some(mcu);
-
+        fn new(mcu: Option<String<8>>, serial: Option<String<126>>) -> Self {
             Self { mcu, serial }
         }
     }
@@ -212,16 +205,13 @@ mod app {
     #[shared]
     struct Shared {
         ctrl_producer: Producer<'static, kiibohd_usb::CtrlState, CTRL_QUEUE_SIZE>,
-        //debug_led: Pb0<Output<PushPull>>,
         hidio_intf: HidioCommandInterface,
         kbd_producer: Producer<'static, kiibohd_usb::KeyState, KBD_QUEUE_SIZE>,
         layer_state: LayerState,
-        //matrix: Matrix,
-        //rtt: RealTimeTimer,
-        //tcc0: TimerCounterChannel<TC0, 0>,
+        matrix: Matrix,
+        timer1: Timer<TIMER1, Periodic>,
         usb_dev: UsbDevice,
         usb_hid: HidInterface,
-        //wdt: Watchdog,
     }
 
     //
@@ -253,12 +243,13 @@ mod app {
         defmt::trace!("MSP: {:#010x}", cortex_m::register::msp::read());
         defmt::trace!("PSP: {:#010x}", cortex_m::register::psp::read());
 
-        // TODO Chip
         // Determine which chip is running
-        /*
-        let chip = ChipId::new(cx.device.CHIPID);
-        defmt::info!("MCU: {:?}", chip.model());
-        */
+        let mut chip: String<8> = String::new();
+        write!(
+            chip,
+            "nRF{:05x}",
+            cx.device.FICR.info.part.read().bits()
+        ).unwrap();
 
         // Setup main and slow clocks
         defmt::trace!("Clock initialization");
@@ -266,79 +257,71 @@ mod app {
         *cx.local.clocks = Some(clocks.enable_ext_hfosc());
         let clocks = cx.local.clocks.as_ref().unwrap();
 
-        // TODO gpios
         // Setup gpios
-        /*
         defmt::trace!("GPIO initialization");
-        let gpio_ports = Ports::new(
-            (
-                cx.device.PIOA,
-                clocks.peripheral_clocks.pio_a.into_enabled_clock(),
-            ),
-            (
-                cx.device.PIOB,
-                clocks.peripheral_clocks.pio_b.into_enabled_clock(),
-            ),
-        );
-        let pins = Pins::new(gpio_ports, &cx.device.MATRIX);
-        */
+        let p0 = gpio::p0::Parts::new(cx.device.P0);
 
-        // TODO - WDG (do we need a watchdog with the softdevice?)
-        // Prepare watchdog to be fed
-        /*
-        let mut wdt = Watchdog::new(cx.device.WDT);
-        wdt.feed();
-        defmt::trace!("Watchdog first feed");
-        */
+        let sense1 = p0.p0_02.into_pulldown_input().degrade();
+        let sense2 = p0.p0_03.into_pulldown_input().degrade();
+        let sense3 = p0.p0_04.into_pulldown_input().degrade();
+        let sense4 = p0.p0_05.into_pulldown_input().degrade();
+        let sense5 = p0.p0_28.into_pulldown_input().degrade();
 
-        // TODO Get unique id (DEVICEID)
-        /*
-        let efc = Efc::new(cx.device.EFC0, unsafe { &mut FLASH_CONFIG });
-        // Retrieve unique id and format it for the USB descriptor
-        let uid = efc.read_unique_id().unwrap();
+        let strobe1 = p0.p0_06.into_push_pull_output(Level::Low).degrade();
+        let strobe2 = p0.p0_07.into_push_pull_output(Level::Low).degrade();
+        let strobe3 = p0.p0_08.into_push_pull_output(Level::Low).degrade();
+        let strobe4 = p0.p0_09.into_push_pull_output(Level::Low).degrade();
+        let strobe5 = p0.p0_10.into_push_pull_output(Level::Low).degrade();
+        let strobe6 = p0.p0_11.into_push_pull_output(Level::Low).degrade();
+        let strobe7 = p0.p0_12.into_push_pull_output(Level::Low).degrade();
+        let strobe8 = p0.p0_13.into_push_pull_output(Level::Low).degrade();
+        let strobe9 = p0.p0_14.into_push_pull_output(Level::Low).degrade();
+        let strobe10 = p0.p0_15.into_push_pull_output(Level::Low).degrade();
+        let strobe11 = p0.p0_16.into_push_pull_output(Level::Low).degrade();
+        let strobe12 = p0.p0_17.into_push_pull_output(Level::Low).degrade();
+        let strobe13 = p0.p0_19.into_push_pull_output(Level::Low).degrade();
+        let strobe14 = p0.p0_20.into_push_pull_output(Level::Low).degrade();
+        let strobe15 = p0.p0_21.into_push_pull_output(Level::Low).degrade();
+        let strobe16 = p0.p0_22.into_push_pull_output(Level::Low).degrade();
+
+        // Retrieve unique id
         write!(
             cx.local.serial_number,
-            "{:x}{:x}{:x}{:x}",
-            uid[0], uid[1], uid[2], uid[3]
+            "{:08x}{:08x}",
+            cx.device.FICR.deviceid[0].read().bits(), cx.device.FICR.deviceid[1].read().bits()
         )
         .unwrap();
         defmt::info!("UID: {}", cx.local.serial_number);
-        */
 
-        // TODO - GPIOS
         // Setup Keyscanning Matrix
-        /*
         defmt::trace!("Keyscanning Matrix initialization");
         let cols = [
-            pins.strobe1.downgrade(),
-            pins.strobe2.downgrade(),
-            pins.strobe3.downgrade(),
-            pins.strobe4.downgrade(),
-            pins.strobe5.downgrade(),
-            pins.strobe6.downgrade(),
-            pins.strobe7.downgrade(),
-            pins.strobe8.downgrade(),
-            pins.strobe9.downgrade(),
-            pins.strobe10.downgrade(),
-            pins.strobe11.downgrade(),
-            pins.strobe12.downgrade(),
-            pins.strobe13.downgrade(),
-            pins.strobe14.downgrade(),
-            pins.strobe15.downgrade(),
-            pins.strobe16.downgrade(),
-            pins.strobe17.downgrade(),
+            strobe1,
+            strobe2,
+            strobe3,
+            strobe4,
+            strobe5,
+            strobe6,
+            strobe7,
+            strobe8,
+            strobe9,
+            strobe10,
+            strobe11,
+            strobe12,
+            strobe13,
+            strobe14,
+            strobe15,
+            strobe16,
         ];
         let rows = [
-            pins.sense1.downgrade(),
-            pins.sense2.downgrade(),
-            pins.sense3.downgrade(),
-            pins.sense4.downgrade(),
-            pins.sense5.downgrade(),
-            pins.sense6.downgrade(),
+            sense1,
+            sense2,
+            sense3,
+            sense4,
+            sense5,
         ];
         let mut matrix = Matrix::new(cols, rows).unwrap();
         matrix.next_strobe().unwrap(); // Initial strobe
-        */
 
         // Setup kll-core
         let loop_condition_lookup: &[u32] = &[0]; // TODO: Use KLL Compiler
@@ -363,7 +346,7 @@ mod app {
                 HidIoCommandId::GetInfo,
                 HidIoCommandId::TestPacket,
             ],
-            HidioInterface::<MESSAGE_LEN>::new(Some(cx.local.serial_number.clone())),
+            HidioInterface::<MESSAGE_LEN>::new(Some(chip), Some(cx.local.serial_number.clone())),
         )
         .unwrap();
 
@@ -391,29 +374,11 @@ mod app {
             .device_release(VERGEN_GIT_COMMIT_COUNT.parse().unwrap())
             .build();
 
-        // TODO - Main timer
-        /*
         // Setup main timer
-        let tc0 = TimerCounter::new(
-            cx.device.TC0,
-            clocks.peripheral_clocks.tc_0.into_enabled_clock(),
-        );
-        let tc0_chs = tc0.split();
-        let mut tcc0 = tc0_chs.ch0;
-        tcc0.clock_input(ClockSource::MckDiv128);
-        tcc0.start((SCAN_PERIOD_US * 1000).nanoseconds());
-        defmt::trace!("TCC0 started");
-        tcc0.enable_interrupt();
-        */
-
-        // TODO - Activity timer?
-        /*
-        // Setup secondary timer (used for watchdog, activity led and sleep related functionality)
-        let mut rtt = RealTimeTimer::new(cx.device.RTT, 3, false);
-        rtt.start(500_000u32.microseconds());
-        rtt.enable_alarm_interrupt();
-        defmt::trace!("RTT Timer started");
-        */
+        let mut timer1 = Timer::periodic(cx.device.TIMER1);
+        timer1.start(SCAN_PERIOD_US);
+        defmt::trace!("TIMER1 started");
+        timer1.enable_interrupt();
 
         // TODO - GPIO pin sleep/wakeup configuration
         // TODO - RGB PWM indicator configuration
@@ -425,20 +390,142 @@ mod app {
         (
             Shared {
                 ctrl_producer,
-                //debug_led: pins.debug_led,
                 hidio_intf,
                 kbd_producer,
                 layer_state,
-                //matrix,
-                //rtt,
-                //tcc0,
+                matrix,
+                timer1,
                 usb_dev,
                 usb_hid,
-                //wdt,
             },
             Local {},
             init::Monotonics {},
         )
+    }
+
+    /// Keyscanning Task (Uses TC0)
+    /// High-priority scheduled tasks as consistency is more important than speed for scanning
+    /// key states
+    /// Scans one strobe at a time
+    #[task(priority = 5, binds = TIMER1, shared = [hidio_intf, layer_state, matrix, timer1])]
+    fn timer1(mut cx: timer1::Context) {
+        let process_macros = cx.shared.matrix.lock(|matrix| {
+            cx.shared.layer_state.lock(|layer_state| {
+                // Scan one strobe (strobes have already been enabled and allowed to settle)
+                if let Ok((reading, strobe)) = matrix.sense::<Void>() {
+                    for (i, entry) in reading.iter().enumerate() {
+                        for event in entry.trigger_event(strobe * RSIZE + i) {
+                            let hidio_event = HidIoEvent::TriggerEvent(event);
+
+                            // Enqueue KLL trigger event
+                            let ret = layer_state.process_trigger::<MAX_LAYER_LOOKUP_SIZE>(event);
+                            assert!(ret.is_ok(), "Failed to enqueue: {:?} - {:?}", event, ret);
+
+                            // Enqueue HID-IO trigger event
+                            cx.shared.hidio_intf.lock(|hidio_intf| {
+                                if let Err(err) = hidio_intf.process_event(hidio_event) {
+                                    defmt::error!("Hidio TriggerEvent Error: {:?}", err);
+                                }
+                            });
+                        }
+                    }
+                }
+
+                // Strobe next column
+                matrix.next_strobe::<Void>().unwrap() == 0
+            })
+        });
+
+        // If a full matrix scanning cycle has finished, process macros
+        if process_macros && macro_process::spawn().is_err() {
+            defmt::warn!("Could not schedule macro_process");
+        }
+    }
+
+    /// Macro Processing Task
+    /// Handles incoming key scan triggers and turns them into results (actions and hid events)
+    /// Has a lower priority than keyscanning to schedule around it.
+    #[task(priority = 6, shared = [ctrl_producer, hidio_intf, kbd_producer, layer_state, matrix])]
+    fn macro_process(mut cx: macro_process::Context) {
+        cx.shared.layer_state.lock(|layer_state| {
+            // Confirm off-state lookups
+            cx.shared.matrix.lock(|matrix| {
+                layer_state.process_off_state_lookups::<MAX_LAYER_LOOKUP_SIZE>(&|index| {
+                    matrix.generate_event(index).unwrap().trigger_event(index)
+                });
+            });
+
+            // Finalize triggers to generate CapabilityRun events
+            for cap_run in layer_state.finalize_triggers::<MAX_LAYER_LOOKUP_SIZE>() {
+                match cap_run {
+                    kll_core::CapabilityRun::NoOp { .. } => {}
+                    kll_core::CapabilityRun::HidKeyboard { .. }
+                    | kll_core::CapabilityRun::HidKeyboardState { .. } => {
+                        cx.shared.kbd_producer.lock(|kbd_producer| {
+                            kiibohd_usb::enqueue_keyboard_event(cap_run, kbd_producer).unwrap();
+                        })
+                    }
+                    kll_core::CapabilityRun::HidProtocol { .. } => {}
+                    kll_core::CapabilityRun::HidConsumerControl { .. }
+                    | kll_core::CapabilityRun::HidSystemControl { .. } => {
+                        cx.shared.ctrl_producer.lock(|ctrl_producer| {
+                            kiibohd_usb::enqueue_ctrl_event(cap_run, ctrl_producer).unwrap();
+                        })
+                    }
+                    /*
+                    kll_core::CapabilityRun::McuFlashMode { .. } => {}
+                    kll_core::CapabilityRun::HidioOpenUrl { .. }
+                    | kll_core::CapabilityRun::HidioUnicodeString { .. }
+                    | kll_core::CapabilityRun::HidioUnicodeState { .. } => {}
+                    kll_core::CapabilityRun::LayerClear { .. }
+                    | kll_core::CapabilityRun::LayerRotate { .. }
+                    | kll_core::CapabilityRun::LayerState { .. } => {}
+                    */
+                    _ => {
+                        panic!("{:?} is unsupported by this keyboard", cap_run);
+                    }
+                }
+            }
+
+            // Next time iteration
+            layer_state.increment_time();
+        });
+
+        // Schedule USB processing
+        if usb_process::spawn().is_err() {
+            defmt::warn!("Could not schedule usb_process");
+        }
+    }
+
+    /// USB Outgoing Events Task
+    /// Sends outgoing USB HID events generated by the macro_process task
+    /// Has a lower priority than keyscanning to schedule around it.
+    #[task(priority = 6, shared = [usb_hid])]
+    fn usb_process(cx: usb_process::Context) {
+        let mut usb_hid = cx.shared.usb_hid;
+        usb_hid.lock(|usb_hid| {
+            // Commit USB events
+            usb_hid.push();
+        });
+    }
+
+    /// USB Device Interupt
+    #[task(priority = 2, binds = USBD, shared = [hidio_intf, usb_dev, usb_hid])]
+    fn usbd(cx: usbd::Context) {
+        let mut usb_dev = cx.shared.usb_dev;
+        let mut usb_hid = cx.shared.usb_hid;
+        let mut hidio_intf = cx.shared.hidio_intf;
+
+        // Poll USB endpoints
+        usb_dev.lock(|usb_dev| {
+            usb_hid.lock(|usb_hid| {
+                hidio_intf.lock(|hidio_intf| {
+                    if usb_dev.poll(&mut usb_hid.interfaces()) {
+                        usb_hid.poll(hidio_intf);
+                    }
+                });
+            });
+        });
     }
 }
 

@@ -1,5 +1,5 @@
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
-runner = "probe-run --chip NRF52833 --speed 20000"
+runner = "probe-run --chip nRF52833_xxAA --speed 14000"
 rustflags = [
    "-C", "linker=flip-link",
    "-C", "link-arg=-Tlink.x",
@@ -26,7 +26,7 @@ objdumpb = "objdump --target thumbv7em-none-eabihf -- --disassemble --no-show-ra
 CARGO_TARGET = "thumbv7em-none-eabihf"
 OPENOCD_INTERFACE = "cmsis-dap"
 OPENOCD_TARGET = "nrf52"
-SWD_SPEED = "20000" # kHz
+SWD_SPEED = "14000" # kHz
 
 [unstable]
 features = ["host_dep"]
