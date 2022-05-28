@@ -10,6 +10,7 @@ members = [
 kll-core = { path = "../kiibohd-core/kll-core" }
 kll-hid = { path = "../kiibohd-core/kll-hid" }
 kiibohd-keyscanning = { path = "../kiibohd-core/kiibohd-keyscanning" }
+kiibohd-hall-effect-keyscanning = { path = "../kiibohd-core/kiibohd-hall-effect-keyscanning" }
 kiibohd-usb = { path = "../kiibohd-core/kiibohd-usb" }
 kiibohd-hid-io = { path = "../kiibohd-core/kiibohd-hid-io" }
 usb-device = { path = "../usb-device" }

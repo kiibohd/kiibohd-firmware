@@ -17,7 +17,7 @@ args = ["brb"]
 
 [tasks.clippy]
 command = "cargo"
-args = ["clippy", "--", "-D", "warnings"]
+args = ["clippyb", "--", "-D", "warnings"]
 
 [tasks.doc]
 env = { "RUSTDOCFLAGS" = "-Dwarnings" }
