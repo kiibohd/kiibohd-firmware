@@ -10,12 +10,15 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/kiibohd/kiibohd-firmware"
 
 [dependencies]
+alloc-cortex-m = "0.4"
 const_env = "0.1"
 cortex-m = "0.7"
 cortex-m-rt = { version = "0.7" }
 cortex-m-rtic = "1.0.0"
 defmt = "0.3"
 defmt-rtt = "0.3"
+embassy = { version = "0.1.0", features = ["defmt"] }
+embassy-nrf = { version = "0.1.0", features = ["nrf52833", "defmt", "unstable-pac", "nightly"] }
 embedded-hal = "0.2.7"
 heapless = "0.7"
 kiibohd-hid-io = { version = "0.1.0" }
@@ -37,7 +40,7 @@ version = "0.15.0"
 [build-dependencies]
 dotenv = "0.15"
 kll-compiler = { git = "https://github.com/kiibohd/kiibohd-core.git" }
-vergen = { git = "https://github.com/haata/vergen", version = "7.0", default-features = false, features = ["git"] }
+vergen = { version = "7.2", default-features = false, features = ["git"] }
 
 [features]
 default = [

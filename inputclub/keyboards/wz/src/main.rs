@@ -7,10 +7,18 @@
 
 #![no_std]
 #![no_main]
+#![allow(incomplete_features)]
+#![feature(alloc_error_handler)]
+#![feature(type_alias_impl_trait)]
+#![macro_use]
 
 use cortex_m_rt::exception;
 use defmt_rtt as _;
+use embassy_nrf as _;
 use nrf52833_hal as hal;
+use nrf_softdevice::ble::peripheral;
+use nrf_softdevice::{raw, Softdevice};
+use nrf_softdevice_defmt_rtt as _; // global logger
 use panic_probe as _;
 use rtic::app;
 
@@ -32,8 +40,14 @@ mod kll {
 // interrupts
 #[app(device = crate::hal::pac, peripherals = true, dispatchers = [SWI0_EGU0, SWI2_EGU2, SWI3_EGU3, SWI4_EGU4, QDEC, NFCT, I2S])]
 mod app {
+    use alloc_cortex_m::CortexMHeap;
+    use core::alloc::Layout;
+    use core::mem;
+    use core::sync::atomic::{AtomicUsize, Ordering};
     use const_env::from_env;
     use core::fmt::Write;
+    use embassy::executor::Executor;
+    use embassy::util::Forever;
     use embedded_hal::{
         timer::CountDown,
     };
@@ -41,6 +55,7 @@ mod app {
     use heapless::String;
     use kiibohd_hid_io::*;
     use kiibohd_usb::HidCountryCode;
+    use nrf_softdevice::{raw, Softdevice};
     use usb_device::{
         bus::UsbBusAllocator,
         device::{UsbDeviceBuilder, UsbVidPid},
@@ -151,6 +166,35 @@ mod app {
     >;
 
     type UsbDevice = usb_device::device::UsbDevice<'static, Usbd<UsbPeripheral<'static>>>;
+
+    // ----- Embassy -----
+
+    #[global_allocator]
+    static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
+
+    // Global embassy executor
+    static EXECUTOR: Forever<Executor> = Forever::new();
+
+    // Out Of Memory (OOM) condition
+    #[alloc_error_handler]
+    fn alloc_error(_layout: Layout) -> ! {
+        panic!("Alloc error");
+    }
+
+    #[embassy::task]
+    async fn embassy_task() {
+        defmt::info!("hello from embassy_task");
+    }
+
+    #[embassy::task]
+    async fn embassy_task2() {
+        defmt::info!("hello from embassy_task2");
+    }
+
+    #[embassy::task]
+    async fn softdevice_task(sd: &'static Softdevice) {
+        sd.run().await;
+    }
 
     // ----- Structs -----
 
@@ -403,6 +447,26 @@ mod app {
         )
     }
 
+    #[idle()]
+    fn idle(_cx: idle::Context) -> ! {
+        //let sd = Softdevice::enable(&config);
+
+        let executor = EXECUTOR.put(Executor::new());
+        executor.run(|spawner| {
+            defmt::unwrap!(spawner.spawn(embassy_task()));
+            defmt::unwrap!(spawner.spawn(embassy_task2()));
+            //unwrap!(spawner.spawn(softdevice_task(sd)));
+            //unwrap!(spawner.spawn(bluetooth_task(sd)));
+        });
+
+        loop {
+            // Now Wait For Interrupt is used instead of a busy-wait loop
+            // to allow MCU to sleep between interrupts
+            // https://developer.arm.com/documentation/ddi0406/c/Application-Level-Architecture/Instruction-Details/Alphabetical-list-of-instructions/WFI
+            rtic::export::wfi()
+        }
+    }
+
     /// Keyscanning Task (Uses TC0)
     /// High-priority scheduled tasks as consistency is more important than speed for scanning
     /// key states
@@ -529,6 +593,8 @@ mod app {
     }
 }
 
+// ----- Other -----
+
 #[exception]
 unsafe fn HardFault(_ef: &cortex_m_rt::ExceptionFrame) -> ! {
     panic!("HardFault!");
@@ -539,7 +605,7 @@ unsafe fn HardFault(_ef: &cortex_m_rt::ExceptionFrame) -> ! {
 defmt::timestamp!("{=u32} us", {
     // TODO (HaaTa): Determine a way to calculate the divider automatically
     //               Or transition to a hardware timer?
-    cortex_m::peripheral::DWT::cycle_count() / 120
+    cortex_m::peripheral::DWT::cycle_count() / 64
 });
 
 /// Same panicking *behavior* as `panic-probe` but doesn't print a panic message

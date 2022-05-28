@@ -15,7 +15,7 @@ kiibohd-usb = { path = "../kiibohd-core/kiibohd-usb" }
 kiibohd-hid-io = { path = "../kiibohd-core/kiibohd-hid-io" }
 usb-device = { path = "../usb-device" }
 embassy = { git = "https://github.com/embassy-rs/embassy" }
-#embassy-nrf = { git = "https://github.com/embassy-rs/embassy" }
+embassy-nrf = { git = "https://github.com/embassy-rs/embassy" }
 embassy-macros = { git = "https://github.com/embassy-rs/embassy" }
 nrf-hal-common = { path = "../nrf-hal/nrf-hal-common" }
 
