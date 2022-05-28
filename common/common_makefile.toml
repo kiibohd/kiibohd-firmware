@@ -1,6 +1,6 @@
 [tasks.bin]
 command = "cargo"
-args = ["objcopy", "--target", "thumbv7em-none-eabi", "--release", "--", "-O", "binary", "${TOP_LEVEL}/target/${DEVICE_BIN_NAME}.dfu.bin"]
+args = ["objcopy", "--target", "${TARGET}", "--release", "--", "-O", "binary", "${TOP_LEVEL}/target/${DEVICE_BIN_NAME}.dfu.bin"]
 
 [tasks.bin-dfu]
 command = "dfu-suffix"
@@ -9,20 +9,20 @@ dependencies = ["bin"]
 
 [tasks.build]
 command = "cargo"
-args = ["bb"]
+args = ["build", "--target", "${TARGET}"]
 
 [tasks.build-release]
 command = "cargo"
-args = ["brb"]
+args = ["build", "--release", "--target", "${TARGET}"]
 
 [tasks.clippy]
 command = "cargo"
-args = ["clippy", "--", "-D", "warnings"]
+args = ["clippy", "--target", "${TARGET}", "--", "-D", "warnings"]
 
 [tasks.doc]
 env = { "RUSTDOCFLAGS" = "-Dwarnings" }
 command = "cargo"
-args = ["doc"]
+args = ["doc", "--target", "${TARGET}"]
 
 [tasks.flash]
 command = "dfu-util"
@@ -47,11 +47,11 @@ args = ["xtask", "gdb-client"]
 
 [tasks.run]
 command = "cargo"
-args = ["rb"]
+args = ["run", "--target", "${TARGET}"]
 
 [tasks.run-release]
 command = "cargo"
-args = ["rrb"]
+args = ["run", "--release", "--target", "${TARGET}"]
 
 [tasks.sanity]
 dependencies = [
@@ -60,3 +60,11 @@ dependencies = [
     "doc",
     "fmt-check",
 ]
+
+[tasks.nm]
+command = "cargo"
+args = ["nm", "--target", "${TARGET}"]
+
+[tasks.objdump]
+command = "cargo"
+args = ["objdump", "--target", "${TARGET}", "--", "--disassemble", "--no-show-raw-insn"]
