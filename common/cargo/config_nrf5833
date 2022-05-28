@@ -14,14 +14,7 @@ rustflags = [
 #target = "thumbv7em-none-eabi"
 
 [alias]
-bb = "build --target thumbv7em-none-eabihf"
-brb = "build --target thumbv7em-none-eabihf --release"
-rb = "run --target thumbv7em-none-eabihf"
-rrb = "run --target thumbv7em-none-eabihf --release"
 xtask = "run --package xtask --"
-nmb = "nm --target thumbv7em-none-eabihf"
-objdumpb = "objdump --target thumbv7em-none-eabihf -- --disassemble --no-show-raw-insn"
-clippyb = "clippy --target thumbv7em-none-eabihf"
 
 [env]
 CARGO_TARGET = "thumbv7em-none-eabihf"

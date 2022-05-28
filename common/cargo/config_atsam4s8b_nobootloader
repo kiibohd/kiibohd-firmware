@@ -14,13 +14,7 @@ rustflags = [
 #target = "thumbv7em-none-eabi"
 
 [alias]
-bb = "build --target thumbv7em-none-eabi"
-brb = "build --target thumbv7em-none-eabi --release"
-rb = "run --target thumbv7em-none-eabi"
-rrb = "run --target thumbv7em-none-eabi --release"
 xtask = "run --package xtask --"
-nmb = "nm --target thumbv7em-none-eabi"
-objdumpb = "objdump --target thumbv7em-none-eabi -- --disassemble --no-show-raw-insn"
 
 [env]
 CARGO_TARGET = "thumbv7em-none-eabi"
