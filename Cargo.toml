@@ -5,6 +5,18 @@ members = [
     "inputclub/keyboards/keystone/tkl",
 ]
 
+[patch.crates-io]
+kll-core = { path = "../kiibohd-core/kll-core" }
+kll-hid = { path = "../kiibohd-core/kll-hid" }
+kiibohd-keyscanning = { path = "../kiibohd-core/kiibohd-keyscanning" }
+kiibohd-hall-effect-keyscanning = { path = "../kiibohd-core/kiibohd-hall-effect-keyscanning" }
+kiibohd-usb = { path = "../kiibohd-core/kiibohd-usb" }
+kiibohd-hid-io = { path = "../kiibohd-core/kiibohd-hid-io" }
+usb-device = { path = "../usb-device" }
+
+[patch."https://github.com/haata/usb-device.git"]
+usb-device = { path = "../usb-device" }
+
 # XXX Important when using gdb XXX
 # NOTE: Comment this section out when using gdb for a better experience
 #       Will increase binary size considerably though.
