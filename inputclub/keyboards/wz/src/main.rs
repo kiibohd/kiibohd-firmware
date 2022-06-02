@@ -96,13 +96,13 @@ mod app {
 
     // TODO - Tune
     const LAYOUT_SIZE: usize = 256;
-    const MAX_ACTIVE_LAYERS: usize = 2;
-    const MAX_ACTIVE_TRIGGERS: usize = 32;
-    const MAX_LAYERS: usize = 2;
-    const MAX_LAYER_STACK_CACHE: usize = 2;
-    const MAX_LAYER_LOOKUP_SIZE: usize = 2;
-    const MAX_OFF_STATE_LOOKUP: usize = 2;
-    const STATE_SIZE: usize = 2;
+    const MAX_ACTIVE_LAYERS: usize = 4;
+    const MAX_ACTIVE_TRIGGERS: usize = 128;
+    const MAX_LAYERS: usize = 8;
+    const MAX_LAYER_STACK_CACHE: usize = 128;
+    const MAX_LAYER_LOOKUP_SIZE: usize = 8;
+    const MAX_OFF_STATE_LOOKUP: usize = 8;
+    const STATE_SIZE: usize = 4;
 
     // ----- Env Constants -----
 
@@ -336,6 +336,7 @@ mod app {
         )
         .unwrap();
         defmt::info!("UID: {}", cx.local.serial_number);
+        defmt::info!("MAC: {:08x}{:08x}", cx.device.FICR.deviceaddr[0].read().bits(), cx.device.FICR.deviceaddr[0].read().bits());
 
         // Setup Keyscanning Matrix
         defmt::trace!("Keyscanning Matrix initialization");
@@ -408,7 +409,7 @@ mod app {
             //mouse_consumer,
             ctrl_consumer,
         );
-        let usb_dev = UsbDeviceBuilder::new(usb_bus, UsbVidPid(VID, PID))
+        let mut usb_dev = UsbDeviceBuilder::new(usb_bus, UsbVidPid(VID, PID))
             .manufacturer(USB_MANUFACTURER)
             .max_packet_size_0(64)
             .max_power(500)
@@ -417,6 +418,7 @@ mod app {
             .serial_number(cx.local.serial_number)
             .device_release(VERGEN_GIT_COMMIT_COUNT.parse().unwrap())
             .build();
+        usb_dev.force_reset().unwrap();
 
         // Setup main timer
         let mut timer1 = Timer::periodic(cx.device.TIMER1);
@@ -481,6 +483,9 @@ mod app {
                         for event in entry.trigger_event(strobe * RSIZE + i) {
                             let hidio_event = HidIoEvent::TriggerEvent(event);
 
+                            // TODO - Not working with dev kit
+                            //defmt::trace!("THIS: {:?}", event);
+                            /*
                             // Enqueue KLL trigger event
                             let ret = layer_state.process_trigger::<MAX_LAYER_LOOKUP_SIZE>(event);
                             assert!(ret.is_ok(), "Failed to enqueue: {:?} - {:?}", event, ret);
@@ -491,6 +496,7 @@ mod app {
                                     defmt::error!("Hidio TriggerEvent Error: {:?}", err);
                                 }
                             });
+                            */
                         }
                     }
                 }
@@ -579,6 +585,7 @@ mod app {
         let mut usb_dev = cx.shared.usb_dev;
         let mut usb_hid = cx.shared.usb_hid;
         let mut hidio_intf = cx.shared.hidio_intf;
+        defmt::info!("YAY");
 
         // Poll USB endpoints
         usb_dev.lock(|usb_dev| {
