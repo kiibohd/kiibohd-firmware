@@ -25,10 +25,10 @@ defmt = "0.3"
 defmt-rtt = "0.3"
 embedded-hal = "0.2.7"
 heapless = "0.7"
-kiibohd-hid-io = "0.1"
-kiibohd-keyscanning = { version = "0.1", features = ["kll-core"] }
-kiibohd-usb = { version = "0.1", default-features = false, features = ["hidio", "defmt-default", "kll-core"] }
-kll-core = "0.1"
+kiibohd-hid-io = { version = "0.1", features = ["defmt"] }
+kiibohd-keyscanning = { version = "0.1", features = ["kll-core", "defmt"] }
+kiibohd-usb = { version = "0.1", features = ["defmt", "kll-core"] }
+kll-core = { version = "0.1", features = ["defmt"] }
 nb = "~0.1"
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 paste = "1.0"

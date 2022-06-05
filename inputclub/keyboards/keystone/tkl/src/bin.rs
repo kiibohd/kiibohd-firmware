@@ -242,6 +242,7 @@ mod app {
         kbd_producer: Producer<'static, kiibohd_usb::KeyState, KBD_QUEUE_SIZE>,
         layer_state: LayerState,
         matrix: Matrix,
+        mouse_producer: Producer<'static, kiibohd_usb::MouseState, MOUSE_QUEUE_SIZE>,
         rtt: RealTimeTimer,
         spi: Option<SpiParkedDma>,
         spi_rxtx: Option<SpiTransferRxTx>,
@@ -486,7 +487,7 @@ mod app {
         // Setup USB
         defmt::trace!("UDP initialization");
         let (kbd_producer, kbd_consumer) = cx.local.kbd_queue.split();
-        let (_mouse_producer, _mouse_consumer) = cx.local.mouse_queue.split();
+        let (mouse_producer, mouse_consumer) = cx.local.mouse_queue.split();
         let (ctrl_producer, ctrl_consumer) = cx.local.ctrl_queue.split();
         let udp_bus = UdpBus::new(
             cx.device.UDP,
@@ -500,7 +501,7 @@ mod app {
             usb_bus,
             HidCountryCode::NotSupported,
             kbd_consumer,
-            //mouse_consumer,
+            mouse_consumer,
             ctrl_consumer,
         );
         let mut usb_dev = UsbDeviceBuilder::new(usb_bus, UsbVidPid(VID, PID))
@@ -546,6 +547,7 @@ mod app {
                 kbd_producer,
                 layer_state,
                 matrix,
+                mouse_producer,
                 rtt,
                 spi: None,
                 spi_rxtx: Some(spi_rxtx),
@@ -616,7 +618,7 @@ mod app {
     /// Macro Processing Task
     /// Handles incoming key scan triggers and turns them into results (actions and hid events)
     /// Has a lower priority than keyscanning to schedule around it.
-    #[task(priority = 10, shared = [ctrl_producer, kbd_producer, layer_state, matrix])]
+    #[task(priority = 10, shared = [ctrl_producer, hidio_intf, kbd_producer, layer_state, matrix, mouse_producer])]
     fn macro_process(mut cx: macro_process::Context) {
         cx.shared.layer_state.lock(|layer_state| {
             // Confirm off-state lookups
@@ -690,7 +692,7 @@ mod app {
         adc.lock(|adc_pdc| {
             // Retrieve DMA buffer
             let (buf, adc) = adc_pdc.take().unwrap().wait();
-            defmt::trace!("DMA BUF: {}", buf);
+            //defmt::trace!("DMA BUF: {}", buf);
 
             matrix.lock(|matrix| {
                 layer_state.lock(|layer_state| {
@@ -762,7 +764,6 @@ mod app {
                     if let Ok(strobe) = matrix.next_strobe() {
                         // On strobe wrap-around, schedule event processing
                         if strobe == 0 {
-                            defmt::warn!("STROBE WRAP-AROUND");
                             if macro_process::spawn().is_err() {
                                 defmt::warn!("Could not schedule macro_process");
                             }

@@ -1,5 +1,6 @@
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
-runner = "probe-run --chip ATSAM4S8B --speed 20000"
+runner = "probe-run --chip ATSAM4S8B --speed 14000"
+#runner = "probe-run --chip ATSAM4S8B --speed 20000"
 rustflags = [
    "-C", "linker=flip-link",
    "-C", "link-arg=-Tlink.x",
@@ -20,7 +21,8 @@ xtask = "run --package xtask --"
 CARGO_TARGET = "thumbv7em-none-eabi"
 OPENOCD_INTERFACE = "cmsis-dap"
 OPENOCD_TARGET = "at91sam4sXX"
-SWD_SPEED = "20000" # kHz
+SWD_SPEED = "14000" # kHz
+#SWD_SPEED = "20000" # kHz
 
 [unstable]
 features = ["host_dep"]

@@ -17,6 +17,12 @@ usb-device = { path = "../usb-device" }
 [patch."https://github.com/haata/usb-device.git"]
 usb-device = { path = "../usb-device" }
 
+[patch."https://github.com/haata/usbd-hid.git"]
+usbd-hid = { path = "../usbd-hid" }
+
+[patch."https://github.com/haata/atsam4-hal.git"]
+atsam4-hal = { path = "../atsam4-hal" }
+
 # XXX Important when using gdb XXX
 # NOTE: Comment this section out when using gdb for a better experience
 #       Will increase binary size considerably though.

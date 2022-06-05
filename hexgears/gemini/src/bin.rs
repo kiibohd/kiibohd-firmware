@@ -220,6 +220,7 @@ mod app {
         kbd_producer: Producer<'static, kiibohd_usb::KeyState, KBD_QUEUE_SIZE>,
         layer_state: LayerState,
         matrix: Matrix,
+        mouse_producer: Producer<'static, kiibohd_usb::MouseState, MOUSE_QUEUE_SIZE>,
         rtt: RealTimeTimer,
         tcc0: TimerCounterChannel<TC0, 0>,
         usb_dev: UsbDevice,
@@ -371,7 +372,7 @@ mod app {
         // Setup USB
         defmt::trace!("UDP initialization");
         let (kbd_producer, kbd_consumer) = cx.local.kbd_queue.split();
-        let (_mouse_producer, _mouse_consumer) = cx.local.mouse_queue.split();
+        let (mouse_producer, mouse_consumer) = cx.local.mouse_queue.split();
         let (ctrl_producer, ctrl_consumer) = cx.local.ctrl_queue.split();
         let udp_bus = UdpBus::new(
             cx.device.UDP,
@@ -385,7 +386,7 @@ mod app {
             usb_bus,
             HidCountryCode::NotSupported,
             kbd_consumer,
-            //mouse_consumer,
+            mouse_consumer,
             ctrl_consumer,
         );
         let mut usb_dev = UsbDeviceBuilder::new(usb_bus, UsbVidPid(VID, PID))
@@ -427,6 +428,7 @@ mod app {
                 kbd_producer,
                 layer_state,
                 matrix,
+                mouse_producer,
                 rtt,
                 tcc0,
                 usb_dev,
@@ -496,7 +498,7 @@ mod app {
     /// Macro Processing Task
     /// Handles incoming key scan triggers and turns them into results (actions and hid events)
     /// Has a lower priority than keyscanning to schedule around it.
-    #[task(priority = 10, shared = [ctrl_producer, hidio_intf, kbd_producer, layer_state, matrix])]
+    #[task(priority = 10, shared = [ctrl_producer, hidio_intf, kbd_producer, layer_state, matrix, mouse_producer])]
     fn macro_process(mut cx: macro_process::Context) {
         cx.shared.layer_state.lock(|layer_state| {
             // Confirm off-state lookups
