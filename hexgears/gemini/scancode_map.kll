@@ -8,7 +8,7 @@ Author = "HaaTa (Jacob Alexander) 2015-2022";
 Date = 2022-03-10;
 
 
-# Function Row (1-19)
+# Function Row (1-16)
 S1 : U"Esc";
 S2 : U"F1";
 S3 : U"F2";
@@ -22,16 +22,13 @@ S10 : U"F9";
 S11 : U"F10";
 S12 : U"F11";
 S13 : U"F12";
-S14 : None;
-S15 : U"PrintScreen";
-S16 : U"Volume Down";
-#S16 +: CONS"Volume Down"; # TODO
-S17 : U"Volume Up";
-#S17 +: CONS"Volume Up"; # TODO
-S18 : None;
-S19 : None;
+S14 : U"PrintScreen";
+S15 : U"Volume Down";
+#S15 +: CONS"Volume Down"; # TODO
+S16 : U"Volume Up";
+#S16 +: CONS"Volume Up"; # TODO
 
-# Number Row (20-38)
+# Number Row (20-36)
 S20 : U"Backtick";
 S21 : U"1";
 S22 : U"2";
@@ -49,10 +46,8 @@ S33 : U"Backspace";
 S34 : U"Insert";
 S35 : U"Home";
 S36 : U"PageUp";
-S37 : None;
-S38 : None;
 
-# Top Alphabet Row (39-57)
+# Top Alphabet Row (39-55)
 S39 : U"Tab";
 S40 : U"Q";
 S41 : U"W";
@@ -70,10 +65,8 @@ S52 : U"Backslash";
 S53 : U"Delete";
 S54 : U"End";
 S55 : U"PageDown";
-S56 : None;
-S57 : None;
 
-# Middle Alphabet Row (58-76)
+# Middle Alphabet Row (58-70)
 S58 : U"CapsLock";
 S59 : U"A";
 S60 : U"S";
@@ -86,55 +79,35 @@ S66 : U"K";
 S67 : U"L";
 S68 : U"Semicolon";
 S69 : U"Quote";
-S70 : None;
-S71 : U"Enter";
-S72 : None;
-S73 : None;
-S74 : None;
-S75 : None;
-S76 : None;
+S70 : U"Enter";
 
-# Bottom Alphabet Row (77-95)
+# Bottom Alphabet Row (77-89)
 S77 : U"LShift";
-S78 : None;
-S79 : U"Z";
-S80 : U"X";
-S81 : U"C";
-S82 : U"V";
-S83 : U"B";
-S84 : U"N";
-S85 : U"M";
-S86 : U"Comma";
-S87 : U"Period";
-S88 : U"Slash";
-S89 : None;
-S90 : U"RShift";
-S91 : None;
-S92 : U"Up";
-S93 : None;
-S94 : None;
-S95 : None;
+S78 : U"Z";
+S79 : U"X";
+S80 : U"C";
+S81 : U"V";
+S82 : U"B";
+S83 : U"N";
+S84 : U"M";
+S85 : U"Comma";
+S86 : U"Period";
+S87 : U"Slash";
+S88 : U"RShift";
+S89 : U"Up";
 
-# Modifier Row (96-114)
+# Modifier Row (96-106)
 S96 : U"LCtrl";
 S97 : U"LGUI";
 S98 : U"LAlt";
-S99 : None;
-S100 : None;
-S101 : U"Space";
-S102 : None;
-S103 : None;
-S104 : None;
-S105 : U"RAlt";
-S106 : U"App";
-S107 : None;
-#S108 : Layer[1]; # TODO
-S109 : U"RCtrl";
-S110 : U"Left";
-S111 : U"Down";
-S112 : U"Right";
-S113 : None;
-S114 : None;
+S99 : U"Space";
+S100 : U"RAlt";
+S101 : U"App";
+#S102 : Layer[1]; # TODO
+S103 : U"RCtrl";
+S104 : U"Left";
+S105 : U"Down";
+S106 : U"Right";
 
 
 # Global Brightness

@@ -49,7 +49,7 @@ mod app {
                 usb_device,
                 usb_device::{
                     bus::UsbBusAllocator,
-                    device::{UsbDeviceBuilder, UsbVidPid},
+                    device::{UsbDeviceBuilder, UsbDeviceState, UsbVidPid},
                 },
                 UdpBus,
             },
@@ -71,24 +71,130 @@ mod app {
     const RSIZE: usize = 6; // Number of rows
     const MSIZE: usize = RSIZE * CSIZE; // Total matrix size
 
-    const CTRL_QUEUE_SIZE: usize = 2;
-    const KBD_QUEUE_SIZE: usize = 2;
-    const MOUSE_QUEUE_SIZE: usize = 2;
+    // Remap lookup
+    // 0 mapped keys are ignored
+    const SWITCH_REMAP: &[u8] = &[
+        1,   // C1;R1:0
+        20,  // C1;R2:1
+        39,  // C1;R3:2
+        58,  // C1;R4:3
+        77,  // C1;R5:4
+        96,  // C1;R6:5
+        2,   // C2;R1:6
+        21,  // C2;R2:7
+        40,  // C2;R3:8
+        59,  // C2;R4:9
+        0,   // C2;R5:10
+        97,  // C2;R6:11
+        3,   // C3;R1:12
+        22,  // C3;R2:13
+        41,  // C3;R3:14
+        60,  // C3;R4:15
+        78,  // C3;R5:16
+        98,  // C3;R6:17
+        4,   // C4;R1:18
+        23,  // C4;R2:19
+        42,  // C4;R3:20
+        61,  // C4;R4:21
+        79,  // C4;R5:22
+        0,   // C4;R6:23
+        5,   // C5;R1:24
+        24,  // C5;R2:25
+        43,  // C5;R3:26
+        62,  // C5;R4:27
+        80,  // C5;R5:28
+        0,   // C5;R6:29
+        6,   // C6;R1:30
+        25,  // C6;R2:31
+        44,  // C6;R3:32
+        63,  // C6;R4:33
+        81,  // C6;R5:34
+        99,  // C6;R6:35
+        7,   // C7;R1:36
+        26,  // C7;R2:37
+        45,  // C7;R3:38
+        64,  // C7;R4:39
+        82,  // C7;R5:40
+        0,   // C7;R6:41
+        8,   // C8;R1:42
+        27,  // C8;R2:43
+        46,  // C8;R3:44
+        65,  // C8;R4:45
+        83,  // C8;R5:46
+        0,   // C8;R6:47
+        9,   // C9;R1:48
+        28,  // C9;R2:49
+        47,  // C9;R3:50
+        66,  // C9;R4:51
+        84,  // C9;R5:52
+        0,   // C9;R6:53
+        10,  // C10;R1:54
+        29,  // C10;R2:55
+        48,  // C10;R3:56
+        67,  // C10;R4:57
+        85,  // C10;R5:58
+        100, // C10;R6:59
+        11,  // C11;R1:60
+        30,  // C11;R2:61
+        49,  // C11;R3:62
+        68,  // C11;R4:63
+        86,  // C11;R5:64
+        101, // C11;R6:65
+        12,  // C12;R1:66
+        31,  // C12;R2:67
+        50,  // C12;R3:68
+        69,  // C12;R4:69
+        87,  // C12;R5:70
+        0,   // C12;R6:71
+        13,  // C13;R1:72
+        32,  // C13;R2:73
+        51,  // C13;R3:74
+        0,   // C13;R4:75
+        0,   // C13;R5:76
+        102, // C13;R6:77
+        0,   // C14;R1:78
+        33,  // C14;R2:79
+        52,  // C14;R3:80
+        70,  // C14;R4:81
+        88,  // C14;R5:82
+        103, // C14;R6:83
+        14,  // C15;R1:84
+        34,  // C15;R2:85
+        53,  // C15;R3:86
+        0,   // C15;R4:87
+        0,   // C15;R5:88
+        104, // C15;R6:89
+        15,  // C16;R1:90
+        35,  // C16;R2:91
+        54,  // C16;R3:92
+        0,   // C16;R4:93
+        89,  // C16;R5:94
+        105, // C16;R6:95
+        16,  // C17;R1:96
+        36,  // C17;R2:97
+        55,  // C17;R3:98
+        0,   // C17;R4:99
+        0,   // C17;R5:100
+        106, // C17;R6:101
+    ];
+
+    const CTRL_QUEUE_SIZE: usize = 5;
+    const KBD_QUEUE_SIZE: usize = 25;
+    const MOUSE_QUEUE_SIZE: usize = 10;
 
     const SCAN_PERIOD_US: u32 = 1000 / CSIZE as u32; // Scan all strobes within 1 ms (1000 Hz) for USB
     const DEBOUNCE_US: u32 = 5000; // 5 ms TODO Tuning
     const IDLE_MS: u32 = 600_000; // 600 seconds TODO Tuning
 
     // KLL Constants
-    // TODO - Tune
     const LAYOUT_SIZE: usize = 256;
-    const MAX_ACTIVE_LAYERS: usize = 2;
-    const MAX_ACTIVE_TRIGGERS: usize = 2;
-    const MAX_LAYERS: usize = 2;
-    const MAX_LAYER_STACK_CACHE: usize = 2;
-    const MAX_LAYER_LOOKUP_SIZE: usize = 2;
-    const MAX_OFF_STATE_LOOKUP: usize = 2;
-    const STATE_SIZE: usize = 2;
+    const MAX_ACTIVE_LAYERS: usize = 8;
+    const MAX_ACTIVE_TRIGGERS: usize = 64;
+    const MAX_LAYERS: usize = 16;
+    const MAX_LAYER_STACK_CACHE: usize = 64;
+    const MAX_LAYER_LOOKUP_SIZE: usize = 64;
+    const MAX_OFF_STATE_LOOKUP: usize = 16;
+    const STATE_SIZE: usize = 32;
 
     #[from_env]
     const VID: u16 = 0x1c11;
@@ -374,12 +480,13 @@ mod app {
         let (kbd_producer, kbd_consumer) = cx.local.kbd_queue.split();
         let (mouse_producer, mouse_consumer) = cx.local.mouse_queue.split();
         let (ctrl_producer, ctrl_consumer) = cx.local.ctrl_queue.split();
-        let udp_bus = UdpBus::new(
+        let mut udp_bus = UdpBus::new(
             cx.device.UDP,
             clocks.peripheral_clocks.udp,
             pins.udp_ddm,
             pins.udp_ddp,
         );
+        udp_bus.remote_wakeup_enabled(true); // Enable hardware support for remote wakeup
         *cx.local.usb_bus = Some(UsbBusAllocator::<UdpBus>::new(udp_bus));
         let usb_bus = cx.local.usb_bus.as_ref().unwrap();
         let usb_hid = HidInterface::new(
@@ -394,7 +501,7 @@ mod app {
             .max_packet_size_0(64)
             .max_power(500)
             .product(USB_PRODUCT)
-            .supports_remote_wakeup(true) // TODO Add support
+            .supports_remote_wakeup(true)
             .serial_number(cx.local.serial_number)
             .device_release(VERGEN_GIT_COMMIT_COUNT.parse().unwrap())
             .build();
@@ -453,12 +560,19 @@ mod app {
                 // Scan one strobe (strobes have already been enabled and allowed to settle)
                 if let Ok((reading, strobe)) = matrix.sense::<Infallible>() {
                     for (i, entry) in reading.iter().enumerate() {
-                        for event in entry.trigger_event(strobe * RSIZE + i) {
+                        for event in
+                            entry.trigger_event(SWITCH_REMAP[strobe * RSIZE + i] as usize, true)
+                        {
                             let hidio_event = HidIoEvent::TriggerEvent(event);
 
                             // Enqueue KLL trigger event
                             let ret = layer_state.process_trigger::<MAX_LAYER_LOOKUP_SIZE>(event);
-                            assert!(ret.is_ok(), "Failed to enqueue: {:?} - {:?}", event, ret);
+                            debug_assert!(
+                                ret.is_ok(),
+                                "Failed to enqueue: {:?} - {:?}",
+                                event,
+                                ret
+                            );
 
                             // Enqueue HID-IO trigger event
                             cx.shared.hidio_intf.lock(|hidio_intf| {
@@ -504,7 +618,10 @@ mod app {
             // Confirm off-state lookups
             cx.shared.matrix.lock(|matrix| {
                 layer_state.process_off_state_lookups::<MAX_LAYER_LOOKUP_SIZE>(&|index| {
-                    matrix.generate_event(index).unwrap().trigger_event(index)
+                    matrix
+                        .generate_event(index)
+                        .unwrap()
+                        .trigger_event(index, false)
                 });
             });
 
@@ -515,14 +632,20 @@ mod app {
                     kll_core::CapabilityRun::HidKeyboard { .. }
                     | kll_core::CapabilityRun::HidKeyboardState { .. } => {
                         cx.shared.kbd_producer.lock(|kbd_producer| {
-                            kiibohd_usb::enqueue_keyboard_event(cap_run, kbd_producer).unwrap();
+                            debug_assert!(
+                                kiibohd_usb::enqueue_keyboard_event(cap_run, kbd_producer).is_ok(),
+                                "KBD_QUEUE_SIZE too small"
+                            );
                         })
                     }
                     kll_core::CapabilityRun::HidProtocol { .. } => {}
                     kll_core::CapabilityRun::HidConsumerControl { .. }
                     | kll_core::CapabilityRun::HidSystemControl { .. } => {
                         cx.shared.ctrl_producer.lock(|ctrl_producer| {
-                            kiibohd_usb::enqueue_ctrl_event(cap_run, ctrl_producer).unwrap();
+                            debug_assert!(
+                                kiibohd_usb::enqueue_ctrl_event(cap_run, ctrl_producer).is_ok(),
+                                "CTRL_QUEUE_SIZE too small"
+                            );
                         })
                     }
                     /*
@@ -553,12 +676,31 @@ mod app {
     /// USB Outgoing Events Task
     /// Sends outgoing USB HID events generated by the macro_process task
     /// Has a lower priority than keyscanning to schedule around it.
-    #[task(priority = 11, shared = [usb_hid])]
+    #[task(priority = 11, shared = [usb_hid, usb_dev])]
     fn usb_process(cx: usb_process::Context) {
+        let mut usb_dev = cx.shared.usb_dev;
         let mut usb_hid = cx.shared.usb_hid;
         usb_hid.lock(|usb_hid| {
-            // Commit USB events
-            usb_hid.push();
+            // Update USB events
+            if usb_hid.update() {
+                usb_dev.lock(|usb_dev| {
+                    match usb_dev.state() {
+                        UsbDeviceState::Suspend => {
+                            // Issue USB Resume if enabled
+                            if usb_dev.remote_wakeup_enabled() {
+                                usb_dev.bus().remote_wakeup();
+                            }
+                        }
+
+                        UsbDeviceState::Configured => {
+                            // Commit USB events
+                            while usb_hid.push().is_err() {}
+                        }
+
+                        _ => {}
+                    }
+                });
+            }
         });
     }
 
