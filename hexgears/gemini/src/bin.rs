@@ -29,7 +29,7 @@ mod app {
     use const_env::from_env;
     use core::convert::Infallible;
     use core::fmt::Write;
-    use heapless::spsc::{Producer, Queue};
+    use heapless::spsc::{Consumer, Producer, Queue};
     use heapless::String;
     use kiibohd_hid_io::*;
     use kiibohd_usb::HidCountryCode;
@@ -180,6 +180,7 @@ mod app {
 
     const CTRL_QUEUE_SIZE: usize = 5;
     const KBD_QUEUE_SIZE: usize = 25;
+    const KBD_LED_QUEUE_SIZE: usize = 3;
     const MOUSE_QUEUE_SIZE: usize = 10;
 
     const SCAN_PERIOD_US: u32 = 1000 / CSIZE as u32; // Scan all strobes within 1 ms (1000 Hz) for USB
@@ -221,6 +222,7 @@ mod app {
         'static,
         UdpBus,
         KBD_QUEUE_SIZE,
+        KBD_LED_QUEUE_SIZE,
         MOUSE_QUEUE_SIZE,
         CTRL_QUEUE_SIZE,
     >;
@@ -323,6 +325,7 @@ mod app {
         ctrl_producer: Producer<'static, kiibohd_usb::CtrlState, CTRL_QUEUE_SIZE>,
         debug_led: Pb0<Output<PushPull>>,
         hidio_intf: HidioCommandInterface,
+        kbd_led_consumer: Consumer<'static, kiibohd_usb::LedState, KBD_LED_QUEUE_SIZE>,
         kbd_producer: Producer<'static, kiibohd_usb::KeyState, KBD_QUEUE_SIZE>,
         layer_state: LayerState,
         matrix: Matrix,
@@ -347,6 +350,7 @@ mod app {
         local = [
             ctrl_queue: Queue<kiibohd_usb::CtrlState, CTRL_QUEUE_SIZE> = Queue::new(),
             kbd_queue: Queue<kiibohd_usb::KeyState, KBD_QUEUE_SIZE> = Queue::new(),
+            kbd_led_queue: Queue<kiibohd_usb::LedState, KBD_LED_QUEUE_SIZE> = Queue::new(),
             mouse_queue: Queue<kiibohd_usb::MouseState, MOUSE_QUEUE_SIZE> = Queue::new(),
             serial_number: String<126> = String::new(),
             usb_bus: Option<UsbBusAllocator<UdpBus>> = None,
@@ -478,6 +482,7 @@ mod app {
         // Setup USB
         defmt::trace!("UDP initialization");
         let (kbd_producer, kbd_consumer) = cx.local.kbd_queue.split();
+        let (kbd_led_producer, kbd_led_consumer) = cx.local.kbd_led_queue.split();
         let (mouse_producer, mouse_consumer) = cx.local.mouse_queue.split();
         let (ctrl_producer, ctrl_consumer) = cx.local.ctrl_queue.split();
         let mut udp_bus = UdpBus::new(
@@ -493,6 +498,7 @@ mod app {
             usb_bus,
             HidCountryCode::NotSupported,
             kbd_consumer,
+            kbd_led_producer,
             mouse_consumer,
             ctrl_consumer,
         );
@@ -532,6 +538,7 @@ mod app {
                 ctrl_producer,
                 debug_led: pins.debug_led,
                 hidio_intf,
+                kbd_led_consumer,
                 kbd_producer,
                 layer_state,
                 matrix,
@@ -612,9 +619,37 @@ mod app {
     /// Macro Processing Task
     /// Handles incoming key scan triggers and turns them into results (actions and hid events)
     /// Has a lower priority than keyscanning to schedule around it.
-    #[task(priority = 10, shared = [ctrl_producer, hidio_intf, kbd_producer, layer_state, matrix, mouse_producer])]
+    #[task(priority = 10, shared = [
+        ctrl_producer,
+        hidio_intf,
+        kbd_led_consumer,
+        kbd_producer,
+        layer_state,
+        matrix,
+        mouse_producer,
+    ])]
     fn macro_process(mut cx: macro_process::Context) {
         cx.shared.layer_state.lock(|layer_state| {
+            // Query HID LED Events
+            cx.shared.kbd_led_consumer.lock(|kbd_led_consumer| {
+                while let Some(state) = kbd_led_consumer.dequeue() {
+                    // Convert to a TriggerEvent
+                    let event = state.trigger_event();
+                    let hidio_event = HidIoEvent::TriggerEvent(event);
+
+                    // Enqueue KLL trigger event
+                    let ret = layer_state.process_trigger::<MAX_LAYER_LOOKUP_SIZE>(event);
+                    debug_assert!(ret.is_ok(), "Failed to enqueue: {:?} - {:?}", event, ret);
+
+                    // Enqueue HID-IO trigger event
+                    cx.shared.hidio_intf.lock(|hidio_intf| {
+                        if let Err(err) = hidio_intf.process_event(hidio_event) {
+                            defmt::error!("Hidio TriggerEvent Error: {:?}", err);
+                        }
+                    });
+                }
+            });
+
             // Confirm off-state lookups
             cx.shared.matrix.lock(|matrix| {
                 layer_state.process_off_state_lookups::<MAX_LAYER_LOOKUP_SIZE>(&|index| {
@@ -684,6 +719,7 @@ mod app {
             // Update USB events
             if usb_hid.update() {
                 usb_dev.lock(|usb_dev| {
+                    defmt::trace!("Device State: {:?}", usb_dev.state());
                     match usb_dev.state() {
                         UsbDeviceState::Suspend => {
                             // Issue USB Resume if enabled
@@ -726,6 +762,10 @@ mod app {
             usb_hid.lock(|usb_hid| {
                 hidio_intf.lock(|hidio_intf| {
                     if usb_dev.poll(&mut usb_hid.interfaces()) {
+                        // Retrive HID Lock LED events
+                        usb_hid.pull();
+
+                        // Process HID-IO
                         usb_hid.poll(hidio_intf);
                     }
                 });
