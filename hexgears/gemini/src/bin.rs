@@ -8,15 +8,10 @@
 #![no_std]
 #![no_main]
 
+mod constants;
+mod hidio;
+
 use cortex_m_rt::exception;
-
-// ----- Flash Config -----
-
-const FLASH_CONFIG_SIZE: usize = 524288 / core::mem::size_of::<u32>();
-extern "C" {
-    #[link_name = "_flash"]
-    static mut FLASH_CONFIG: [u32; FLASH_CONFIG_SIZE];
-}
 
 // ----- RTIC -----
 
@@ -25,12 +20,12 @@ extern "C" {
 // software tasks.
 #[rtic::app(device = gemini::hal::pac, peripherals = true, dispatchers = [UART1, USART0, USART1, SSC, PWM, ACC, ADC, SPI])]
 mod app {
-    use crate::FLASH_CONFIG;
-    use const_env::from_env;
     use core::convert::Infallible;
     use core::fmt::Write;
-    use heapless::spsc::{Consumer, Producer, Queue};
+    use crate::constants::*;
+    use crate::hidio::*;
     use heapless::String;
+    use heapless::spsc::{Consumer, Producer, Queue};
     use kiibohd_hid_io::*;
     use kiibohd_usb::HidCountryCode;
 
@@ -58,163 +53,6 @@ mod app {
         },
         kll, Pins,
     };
-
-    // ----- Sizes -----
-
-    const BUF_CHUNK: usize = 64;
-    const ID_LEN: usize = 10;
-    const RX_BUF: usize = 8;
-    const SERIALIZATION_LEN: usize = 277;
-    const TX_BUF: usize = 8;
-
-    const CSIZE: usize = 17; // Number of columns
-    const RSIZE: usize = 6; // Number of rows
-    const MSIZE: usize = RSIZE * CSIZE; // Total matrix size
-
-    // Remap lookup
-    // 0 mapped keys are ignored
-    const SWITCH_REMAP: &[u8] = &[
-        1,   // C1;R1:0
-        20,  // C1;R2:1
-        39,  // C1;R3:2
-        58,  // C1;R4:3
-        77,  // C1;R5:4
-        96,  // C1;R6:5
-        2,   // C2;R1:6
-        21,  // C2;R2:7
-        40,  // C2;R3:8
-        59,  // C2;R4:9
-        0,   // C2;R5:10
-        97,  // C2;R6:11
-        3,   // C3;R1:12
-        22,  // C3;R2:13
-        41,  // C3;R3:14
-        60,  // C3;R4:15
-        78,  // C3;R5:16
-        98,  // C3;R6:17
-        4,   // C4;R1:18
-        23,  // C4;R2:19
-        42,  // C4;R3:20
-        61,  // C4;R4:21
-        79,  // C4;R5:22
-        0,   // C4;R6:23
-        5,   // C5;R1:24
-        24,  // C5;R2:25
-        43,  // C5;R3:26
-        62,  // C5;R4:27
-        80,  // C5;R5:28
-        0,   // C5;R6:29
-        6,   // C6;R1:30
-        25,  // C6;R2:31
-        44,  // C6;R3:32
-        63,  // C6;R4:33
-        81,  // C6;R5:34
-        99,  // C6;R6:35
-        7,   // C7;R1:36
-        26,  // C7;R2:37
-        45,  // C7;R3:38
-        64,  // C7;R4:39
-        82,  // C7;R5:40
-        0,   // C7;R6:41
-        8,   // C8;R1:42
-        27,  // C8;R2:43
-        46,  // C8;R3:44
-        65,  // C8;R4:45
-        83,  // C8;R5:46
-        0,   // C8;R6:47
-        9,   // C9;R1:48
-        28,  // C9;R2:49
-        47,  // C9;R3:50
-        66,  // C9;R4:51
-        84,  // C9;R5:52
-        0,   // C9;R6:53
-        10,  // C10;R1:54
-        29,  // C10;R2:55
-        48,  // C10;R3:56
-        67,  // C10;R4:57
-        85,  // C10;R5:58
-        100, // C10;R6:59
-        11,  // C11;R1:60
-        30,  // C11;R2:61
-        49,  // C11;R3:62
-        68,  // C11;R4:63
-        86,  // C11;R5:64
-        101, // C11;R6:65
-        12,  // C12;R1:66
-        31,  // C12;R2:67
-        50,  // C12;R3:68
-        69,  // C12;R4:69
-        87,  // C12;R5:70
-        0,   // C12;R6:71
-        13,  // C13;R1:72
-        32,  // C13;R2:73
-        51,  // C13;R3:74
-        0,   // C13;R4:75
-        0,   // C13;R5:76
-        102, // C13;R6:77
-        0,   // C14;R1:78
-        33,  // C14;R2:79
-        52,  // C14;R3:80
-        70,  // C14;R4:81
-        88,  // C14;R5:82
-        103, // C14;R6:83
-        14,  // C15;R1:84
-        34,  // C15;R2:85
-        53,  // C15;R3:86
-        0,   // C15;R4:87
-        0,   // C15;R5:88
-        104, // C15;R6:89
-        15,  // C16;R1:90
-        35,  // C16;R2:91
-        54,  // C16;R3:92
-        0,   // C16;R4:93
-        89,  // C16;R5:94
-        105, // C16;R6:95
-        16,  // C17;R1:96
-        36,  // C17;R2:97
-        55,  // C17;R3:98
-        0,   // C17;R4:99
-        0,   // C17;R5:100
-        106, // C17;R6:101
-    ];
-
-    const CTRL_QUEUE_SIZE: usize = 5;
-    const KBD_QUEUE_SIZE: usize = 25;
-    const KBD_LED_QUEUE_SIZE: usize = 3;
-    const MOUSE_QUEUE_SIZE: usize = 10;
-
-    const SCAN_PERIOD_US: u32 = 1000 / CSIZE as u32; // Scan all strobes within 1 ms (1000 Hz) for USB
-    const DEBOUNCE_US: u32 = 5000; // 5 ms TODO Tuning
-    const IDLE_MS: u32 = 600_000; // 600 seconds TODO Tuning
-
-    // KLL Constants
-    const LAYOUT_SIZE: usize = 256;
-    const MAX_ACTIVE_LAYERS: usize = 8;
-    const MAX_ACTIVE_TRIGGERS: usize = 64;
-    const MAX_LAYERS: usize = 16;
-    const MAX_LAYER_STACK_CACHE: usize = 64;
-    const MAX_LAYER_LOOKUP_SIZE: usize = 64;
-    const MAX_OFF_STATE_LOOKUP: usize = 16;
-    const STATE_SIZE: usize = 32;
-
-    #[from_env]
-    const VID: u16 = 0x1c11;
-    #[from_env]
-    const PID: u16 = 0xb04d;
-    #[from_env]
-    const USB_MANUFACTURER: &str = "Unknown";
-    #[from_env]
-    const USB_PRODUCT: &str = "Kiibohd";
-    #[from_env]
-    const HIDIO_DEVICE_NAME: &str = "Kiibohd";
-    #[from_env]
-    const HIDIO_DEVICE_VENDOR: &str = "Unknown";
-    #[from_env]
-    const HIDIO_FIRMWARE_NAME: &str = "kiibohd-firmware";
-    #[from_env]
-    const VERGEN_GIT_SEMVER: &str = "N/A";
-    #[from_env]
-    const VERGEN_GIT_COMMIT_COUNT: &str = "0";
 
     // ----- Types -----
 
@@ -260,142 +98,6 @@ mod app {
     type UsbDevice = usb_device::device::UsbDevice<'static, UdpBus>;
 
     // ----- Structs -----
-
-    #[derive(defmt::Format)]
-    pub struct ManufacturingConfig {
-        /// Cycles LEDs thruogh all available colors to check for dead LEDs
-        pub led_test_sequence: bool,
-        /// Lumissil LED short test
-        pub led_short_test: bool,
-        /// Lumissil LED open test
-        pub led_open_test: bool,
-        /// Switch shake test (cycles color of switch LED on each press and release event)
-        pub shake_test_led_cycle: bool,
-    }
-
-    pub struct HidioInterface<const H: usize> {
-        mcu: Option<String<12>>,
-        serial: Option<String<126>>,
-        pub manufacturing_config: ManufacturingConfig,
-    }
-
-    impl<const H: usize> HidioInterface<H> {
-        fn new(chip: &ChipId, serial: Option<String<126>>) -> Self {
-            let mcu = if let Some(model) = chip.model() {
-                let mut mcu: String<12> = String::new();
-                if write!(mcu, "{:?}", model).is_ok() {
-                    Some(mcu)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            // Default all tests to off
-            let manufacturing_config = ManufacturingConfig {
-                led_test_sequence: false,
-                led_short_test: false,
-                led_open_test: false,
-                shake_test_led_cycle: false,
-            };
-
-            Self {
-                mcu,
-                serial,
-                manufacturing_config,
-            }
-        }
-    }
-
-    impl<const H: usize> KiibohdCommandInterface<H> for HidioInterface<H> {
-        fn h0001_device_name(&self) -> Option<&str> {
-            Some(HIDIO_DEVICE_NAME)
-        }
-
-        fn h0001_device_mcu(&self) -> Option<&str> {
-            if let Some(mcu) = &self.mcu {
-                Some(mcu)
-            } else {
-                None
-            }
-        }
-
-        fn h0001_device_serial_number(&self) -> Option<&str> {
-            if let Some(serial) = &self.serial {
-                Some(serial)
-            } else {
-                None
-            }
-        }
-
-        fn h0001_device_vendor(&self) -> Option<&str> {
-            Some(HIDIO_DEVICE_VENDOR)
-        }
-
-        fn h0001_firmware_name(&self) -> Option<&str> {
-            Some(HIDIO_FIRMWARE_NAME)
-        }
-
-        fn h0001_firmware_version(&self) -> Option<&str> {
-            Some(VERGEN_GIT_SEMVER)
-        }
-
-        fn h0050_manufacturing_cmd(&mut self, data: h0050::Cmd) -> Result<h0050::Ack, h0050::Nak> {
-            // Make sure these are valid command/arguments for this keyboard
-            let ret = match data.command {
-                // LED test sequences
-                0x0001 => {
-                    match data.argument {
-                        // Disable all
-                        0x0000 => {
-                            self.manufacturing_config.led_test_sequence = false;
-                            self.manufacturing_config.led_short_test = false;
-                            self.manufacturing_config.led_open_test = false;
-                            Ok(h0050::Ack {})
-                        }
-                        // Toggle LED test sequence
-                        0x0001 => {
-                            self.manufacturing_config.led_test_sequence = true;
-                            Ok(h0050::Ack {})
-                        }
-                        // Enable LED short test (auto disable after completion)
-                        // Sends data using h0051
-                        0x0002 => {
-                            self.manufacturing_config.led_short_test = true;
-                            Ok(h0050::Ack {})
-                        }
-                        // Enable LED open test (auto disable after completion)
-                        // Sends data using h0051
-                        0x0003 => {
-                            self.manufacturing_config.led_open_test = true;
-                            Ok(h0050::Ack {})
-                        }
-                        _ => Err(h0050::Nak {})
-                    }
-                }
-                // Shake test
-                0x0002 => {
-                    match data.argument {
-                        // Disables
-                        0x0000 => {
-                            self.manufacturing_config.shake_test_led_cycle = false;
-                            Ok(h0050::Ack {})
-                        }
-                        // Enables shake test
-                        0x0001 => {
-                            self.manufacturing_config.shake_test_led_cycle = true;
-                            Ok(h0050::Ack {})
-                        }
-                        _ => Err(h0050::Nak {})
-                    }
-                }
-                _ => Err(h0050::Nak {})
-            };
-            defmt::trace!("h0050_manufacturing_cmd: {:?} -> {:?}", data, self.manufacturing_config);
-            ret
-        }
-    }
 
     //
     // Shared resources used by tasks/interrupts
