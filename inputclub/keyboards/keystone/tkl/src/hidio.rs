@@ -5,11 +5,11 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+use super::constants::*;
 use core::fmt::Write;
 use heapless::String;
 use keystonetkl::hal::chipid::ChipId;
 use kiibohd_hid_io::*;
-use super::constants::*;
 
 #[derive(defmt::Format)]
 pub struct ManufacturingConfig {

@@ -23,6 +23,8 @@ mod app {
     use crate::constants::*;
     use crate::hidio::*;
     use core::fmt::Write;
+    use dwt_systick_monotonic::*;
+    use fugit::{HertzU32 as Hertz, RateExtU32};
     use heapless::spsc::{Consumer, Producer, Queue};
     use heapless::String;
     use is31fl3743b::Is31fl3743bAtsam4Dma;
@@ -39,10 +41,8 @@ mod app {
             pac::TC0,
             pdc::{ReadDma, ReadDmaPaused, ReadWriteDmaLen, RxDma, RxTxDma, Transfer, W},
             prelude::*,
-            rtt::RealTimeTimer,
             spi::{SpiMaster, SpiPayload, Variable},
-            time::duration::Extensions,
-            timer::{ClockSource, TimerCounter, TimerCounterChannel},
+            timer::{TimerCounter, TimerCounterChannel, TimerCounterChannels},
             udp::{
                 usb_device,
                 usb_device::{
@@ -52,6 +52,7 @@ mod app {
                 UdpBus,
             },
             watchdog::Watchdog,
+            ToggleableOutputPin,
         },
         kll, Pins,
     };
@@ -76,12 +77,24 @@ mod app {
         SERIALIZATION_LEN,
         ID_LEN,
     >;
+    type LayerLookup = kll_core::layout::LayerLookup<'static, LAYOUT_SIZE>;
+    type LayerState = kll_core::layout::LayerState<
+        'static,
+        LAYOUT_SIZE,
+        STATE_SIZE,
+        MAX_LAYERS,
+        MAX_ACTIVE_LAYERS,
+        MAX_ACTIVE_TRIGGERS,
+        MAX_LAYER_STACK_CACHE,
+        MAX_OFF_STATE_LOOKUP,
+    >;
     type Matrix = kiibohd_hall_effect_keyscanning::Matrix<
         PioX<Output<PushPull>>,
         CSIZE,
         MSIZE,
         INVERT_STROBE,
     >;
+    type RealTimeTimer = keystonetkl::hal::rtt::RealTimeTimer<RTT_PRESCALER, false>;
     type SpiTransferRxTx = Transfer<
         W,
         (
@@ -95,19 +108,10 @@ mod app {
         &'static mut [u32; SPI_RX_BUF_SIZE],
         &'static mut [u32; SPI_TX_BUF_SIZE],
     );
-    type LayerLookup = kll_core::layout::LayerLookup<'static, LAYOUT_SIZE>;
-    type LayerState = kll_core::layout::LayerState<
-        'static,
-        LAYOUT_SIZE,
-        STATE_SIZE,
-        MAX_LAYERS,
-        MAX_ACTIVE_LAYERS,
-        MAX_ACTIVE_TRIGGERS,
-        MAX_LAYER_STACK_CACHE,
-        MAX_OFF_STATE_LOOKUP,
-    >;
-
     type UsbDevice = usb_device::device::UsbDevice<'static, UdpBus>;
+
+    #[monotonic(binds = SysTick, default = true)]
+    type DwtMono = DwtSystick<MCU_FREQ>;
 
     // ----- Structs -----
 
@@ -117,29 +121,32 @@ mod app {
     #[shared]
     struct Shared {
         adc: Option<AdcTransfer>,
-        ctrl_producer: Producer<'static, kiibohd_usb::CtrlState, CTRL_QUEUE_SIZE>,
-        debug_led: Pa15<Output<PushPull>>,
         hidio_intf: HidioCommandInterface,
         issi: Is31fl3743bAtsam4Dma<ISSI_DRIVER_CHIPS, ISSI_DRIVER_QUEUE_SIZE>,
-        kbd_led_consumer: Consumer<'static, kiibohd_usb::LedState, KBD_LED_QUEUE_SIZE>,
-        kbd_producer: Producer<'static, kiibohd_usb::KeyState, KBD_QUEUE_SIZE>,
         layer_state: LayerState,
         matrix: Matrix,
-        mouse_producer: Producer<'static, kiibohd_usb::MouseState, MOUSE_QUEUE_SIZE>,
-        rtt: RealTimeTimer,
         spi: Option<SpiParkedDma>,
         spi_rxtx: Option<SpiTransferRxTx>,
-        tcc0: TimerCounterChannel<TC0, 0>,
         usb_dev: UsbDevice,
         usb_hid: HidInterface,
-        wdt: Watchdog,
     }
 
     //
-    // Local resources, static mut variables
+    // Local resources, static mut variables, no locking necessary
+    // (e.g. can be initialized in init and used in 1 other task function)
     //
     #[local]
-    struct Local {}
+    struct Local {
+        ctrl_producer: Producer<'static, kiibohd_usb::CtrlState, CTRL_QUEUE_SIZE>,
+        debug_led: Pa15<Output<PushPull>>,
+        kbd_led_consumer: Consumer<'static, kiibohd_usb::LedState, KBD_LED_QUEUE_SIZE>,
+        kbd_producer: Producer<'static, kiibohd_usb::KeyState, KBD_QUEUE_SIZE>,
+        mouse_producer: Producer<'static, kiibohd_usb::MouseState, MOUSE_QUEUE_SIZE>,
+        rtt: RealTimeTimer,
+        tcc0: TimerCounterChannel<TC0, 0, TCC0_FREQ>,
+        tcc1: TimerCounterChannel<TC0, 1, TCC1_FREQ>,
+        wdt: Watchdog,
+    }
 
     //
     // Initialization
@@ -165,10 +172,6 @@ mod app {
         //TODO - cortex-m-rt v0.8 set-sp feature
         //let sp = 0x20020000;
         //unsafe { asm!("msr MSP, {}", in(reg) sp) };
-
-        // Initialize (enable) the monotonic timer (CYCCNT)
-        cx.core.DCB.enable_trace();
-        cx.core.DWT.enable_cycle_counter();
 
         defmt::info!(">>>> Initializing <<<<");
 
@@ -317,7 +320,7 @@ mod app {
         let mode = atsam4_hal::spi::spi::MODE_3;
         let csa = atsam4_hal::spi::ChipSelectActive::ActiveAfterTransfer;
         let bits = atsam4_hal::spi::BitWidth::Width8Bit;
-        let baud = atsam4_hal::spi::Hertz(12_000_000_u32);
+        let baud: Hertz = 12_u32.MHz();
         // Cycles to delay from CS to first valid SPCK
         let dlybs = 0; // Half an SPCK clock period
         let cs_settings =
@@ -410,117 +413,199 @@ mod app {
             cx.device.TC0,
             clocks.peripheral_clocks.tc_0.into_enabled_clock(),
         );
-        let tc0_chs = tc0.split();
+        let tc0_chs: TimerCounterChannels<TC0, TCC0_FREQ, TCC1_FREQ, TCC2_FREQ> = tc0.split();
+
+        // Keyscanning Timer
         let mut tcc0 = tc0_chs.ch0;
-        tcc0.clock_input(ClockSource::MckDiv128);
-        tcc0.start(200_000u32.nanoseconds());
-        //tcc0.clock_input(ClockSource::Slck32768Hz);
-        //tcc0.start(500_000_000u32.nanoseconds());
-        defmt::trace!("TCC0 started");
+        tcc0.clock_input(TCC0_DIV);
+        tcc0.start(200_u32.micros());
+        defmt::trace!("TCC0 started - Keyscanning");
         tcc0.enable_interrupt();
 
+        // LED Frame Timer
+        let mut tcc1 = tc0_chs.ch1;
+        tcc1.clock_input(TCC1_DIV);
+        tcc1.start(17_u32.millis()); // 17 ms -> ~60 fps (16.6667 ms)
+        defmt::trace!("TCC1 started - LED Frame Scheduling");
+        tcc1.enable_interrupt();
+
         // Setup secondary timer (used for watchdog, activity led and sleep related functionality)
-        let mut rtt = RealTimeTimer::new(cx.device.RTT, 3, false);
-        rtt.start(500_000u32.microseconds());
+        let mut rtt = RealTimeTimer::new(cx.device.RTT);
+        rtt.start(500_000u32.micros());
         rtt.enable_alarm_interrupt();
         defmt::trace!("RTT Timer started");
+
+        // Initialize tickless monotonic timer
+        let mono = DwtSystick::new(&mut cx.core.DCB, cx.core.DWT, cx.core.SYST, MCU_FREQ);
+        defmt::trace!("DwtSystick (Monotonic) started");
 
         (
             Shared {
                 adc: Some(adc.read(cx.local.adc_buf)),
-                ctrl_producer,
-                debug_led: pins.debug_led,
                 hidio_intf,
                 issi,
-                kbd_led_consumer,
-                kbd_producer,
                 layer_state,
                 matrix,
-                mouse_producer,
-                rtt,
                 spi: None,
                 spi_rxtx: Some(spi_rxtx),
-                tcc0,
                 usb_dev,
                 usb_hid,
+            },
+            Local {
+                ctrl_producer,
+                debug_led: pins.debug_led,
+                kbd_led_consumer,
+                kbd_producer,
+                mouse_producer,
+                rtt,
+                tcc0,
+                tcc1,
                 wdt,
             },
-            Local {},
-            init::Monotonics {},
+            init::Monotonics(mono),
         )
     }
 
-    /// Keyscanning Task (Uses TC0)
-    /// High-priority scheduled tasks as consistency is more important than speed for scanning
-    /// key states
-    /// Scans one strobe at a time
-    #[task(priority = 13, binds = TC0, shared = [adc, issi, layer_state, tcc0, spi, spi_rxtx])]
+    /// Timer task (TC0)
+    /// - Keyscanning Task (Uses tcc0)
+    ///   High-priority scheduled tasks as consistency is more important than speed for scanning
+    ///   key states
+    ///   Scans one strobe at a time
+    /// - LED frame scheduling (Uses tcc1)
+    ///   Schedules a lower priority task which is skipped if the previous frame is still
+    ///   processing
+    #[task(priority = 13, binds = TC0, local = [
+        tcc0,
+        tcc1,
+    ], shared = [
+        adc,
+    ])]
     fn tc0(mut cx: tc0::Context) {
-        cx.shared.tcc0.lock(|w| w.clear_interrupt_flags());
-
-        let process_macros = false;
-
-        /*
-        // TODO Determine best place to reinitialize SPI PDC
-        cx.shared.spi.lock(|spi| {
-            spi.enable_txbufe_interrupt();
-            let spi = spi.with_pdc_rxtx();
-            if let Some((spi, rx_buf, tx_buf)) = spi.take() {
-                cx.shared.issi.lock(|issi| {
-                    if let Ok((rx_len, tx_len)) = issi.tx_function(tx_buf) {
-                        cx.shared.spi_rxtx.lock(|spi_rxtx| {
-                            spi_rxtx.replace(spi.read_write_len(rx_buf, rx_len, tx_buf, tx_len));
-                        });
-                    }
-                });
-            }
-        });
-        */
-
-        // Start next ADC DMA buffer read
+        // Check for keyscanning interrupt (tcc0)
         cx.shared.adc.lock(|adc| {
-            if let Some(adc) = adc {
-                adc.resume();
+            if cx.local.tcc0.clear_interrupt_flags() {
+                // Start next ADC DMA buffer read
+                if let Some(adc) = adc {
+                    adc.resume();
+                }
             }
         });
 
-        // If a full matrix scanning cycle has finished, process macros
-        if process_macros && macro_process::spawn().is_err() {
-            defmt::warn!("Could not schedule macro_process");
+        // Check for LED frame scheduling interrupt
+        if cx.local.tcc1.clear_interrupt_flags() {
+            // Attempt to schedule LED frame
+            if led_frame_process::spawn().is_err() {
+                defmt::warn!("Unable to schedule frame...FPS unstable");
+            }
         }
     }
 
     /// Activity tick
     /// Used visually determine MCU status
-    #[task(priority = 1, binds = RTT, shared = [debug_led, rtt, wdt])]
-    fn rtt(mut cx: rtt::Context) {
-        cx.shared.rtt.lock(|w| w.clear_interrupt_flags());
+    #[task(priority = 1, binds = RTT, local = [
+        debug_led,
+        rtt,
+        wdt,
+    ], shared = [])]
+    fn rtt(cx: rtt::Context) {
+        cx.local.rtt.clear_interrupt_flags();
 
         // Feed watchdog
-        cx.shared.wdt.lock(|w| w.feed());
+        cx.local.wdt.feed();
 
         // Blink debug led
         // TODO: Remove (or use feature flag)
-        //cx.shared.debug_led.lock(|w| w.toggle().ok());
+        cx.local.debug_led.toggle().ok();
+    }
+
+    /// LED Frame Processing Task
+    /// Handles each LED frame, triggered at a constant rate.
+    /// Frames are skipped if the previous frame is still processing.
+    #[task(priority = 8, shared = [
+        hidio_intf,
+        issi,
+        spi,
+        spi_rxtx,
+    ])]
+    fn led_frame_process(mut cx: led_frame_process::Context) {
+        // Look for manufacturing test commands
+        cx.shared.hidio_intf.lock(|hidio_intf| {
+            if hidio_intf.interface().manufacturing_config.led_short_test {
+                // Enqueue short test
+                // TODO
+
+                hidio_intf
+                    .mut_interface()
+                    .manufacturing_config
+                    .led_short_test = false;
+            } else if hidio_intf.interface().manufacturing_config.led_open_test {
+                // Enqueue open test
+                // TODO
+
+                hidio_intf
+                    .mut_interface()
+                    .manufacturing_config
+                    .led_open_test = false;
+            }
+            /*
+            defmt::info!(
+                "Manufacturing Info: {:?}",
+                hidio_intf.interface().manufacturing_config
+            );
+            let data: heapless::Vec<u8, 252> = heapless::Vec::from_slice(&[1, 2, 3, 4, 5]).unwrap();
+            hidio_intf
+                .h0051_manufacturingres(h0051::Cmd {
+                    command: 10,
+                    argument: 20,
+                    data,
+                })
+                .unwrap();
+            */
+        });
+
+        // Enable SPI DMA to update frame
+        (cx.shared.spi, cx.shared.issi, cx.shared.spi_rxtx).lock(|spi_periph, issi, spi_rxtx| {
+            // We only need to re-enable DMA if the queue was previously empty and "parked"
+            if let Some((mut spi, rx_buf, tx_buf)) = spi_periph.take() {
+                spi.enable_txbufe_interrupt();
+                let spi = spi.with_pdc_rxtx();
+                // Look for issi event queue
+                if let Ok((rx_len, tx_len)) = issi.tx_function(tx_buf) {
+                    spi_rxtx.replace(spi.read_write_len(rx_buf, rx_len, tx_buf, tx_len));
+                } else {
+                    // Nothing to do (repark dma)
+                    let mut spi = spi.revert();
+                    spi.disable_txbufe_interrupt();
+                    spi_periph.replace((spi, rx_buf, tx_buf));
+                }
+            }
+        });
+
+        // Handle processing of "next" frame
+        // If this takes too long, the next frame update won't be scheduled (i.e. it'll be
+        // skipped).
+        // TODO - KLL Pixelmap
+        // TODO - HIDIO frame updates
     }
 
     /// Macro Processing Task
     /// Handles incoming key scan triggers and turns them into results (actions and hid events)
     /// Has a lower priority than keyscanning to schedule around it.
-    #[task(priority = 10, shared = [
+    #[task(priority = 10, local = [
         ctrl_producer,
-        hidio_intf,
         kbd_led_consumer,
         kbd_producer,
+        mouse_producer,
+    ], shared = [
+        hidio_intf,
         layer_state,
         matrix,
-        mouse_producer,
     ])]
     fn macro_process(mut cx: macro_process::Context) {
-        cx.shared.layer_state.lock(|layer_state| {
+        (cx.shared.layer_state, cx.shared.matrix).lock(|layer_state, matrix| {
             // Query HID LED Events
-            cx.shared.kbd_led_consumer.lock(|kbd_led_consumer| {
-                while let Some(state) = kbd_led_consumer.dequeue() {
+            cx.shared.hidio_intf.lock(|hidio_intf| {
+                while let Some(state) = cx.local.kbd_led_consumer.dequeue() {
                     // Convert to a TriggerEvent
                     let event = state.trigger_event();
                     let hidio_event = HidIoEvent::TriggerEvent(event);
@@ -530,19 +615,15 @@ mod app {
                     debug_assert!(ret.is_ok(), "Failed to enqueue: {:?} - {:?}", event, ret);
 
                     // Enqueue HID-IO trigger event
-                    cx.shared.hidio_intf.lock(|hidio_intf| {
-                        if let Err(err) = hidio_intf.process_event(hidio_event) {
-                            defmt::error!("Hidio TriggerEvent Error: {:?}", err);
-                        }
-                    });
+                    if let Err(err) = hidio_intf.process_event(hidio_event) {
+                        defmt::error!("Hidio TriggerEvent Error: {:?}", err);
+                    }
                 }
             });
 
             // Confirm off-state lookups
-            cx.shared.matrix.lock(|matrix| {
-                layer_state.process_off_state_lookups::<MAX_LAYER_LOOKUP_SIZE>(&|index| {
-                    matrix.generate_event(index)
-                });
+            layer_state.process_off_state_lookups::<MAX_LAYER_LOOKUP_SIZE>(&|index| {
+                matrix.generate_event(index)
             });
 
             // Finalize triggers to generate CapabilityRun events
@@ -551,22 +632,20 @@ mod app {
                     kll_core::CapabilityRun::NoOp { .. } => {}
                     kll_core::CapabilityRun::HidKeyboard { .. }
                     | kll_core::CapabilityRun::HidKeyboardState { .. } => {
-                        cx.shared.kbd_producer.lock(|kbd_producer| {
-                            debug_assert!(
-                                kiibohd_usb::enqueue_keyboard_event(cap_run, kbd_producer).is_ok(),
-                                "KBD_QUEUE_SIZE too small"
-                            );
-                        })
+                        debug_assert!(
+                            kiibohd_usb::enqueue_keyboard_event(cap_run, cx.local.kbd_producer)
+                                .is_ok(),
+                            "KBD_QUEUE_SIZE too small"
+                        );
                     }
                     kll_core::CapabilityRun::HidProtocol { .. } => {}
                     kll_core::CapabilityRun::HidConsumerControl { .. }
                     | kll_core::CapabilityRun::HidSystemControl { .. } => {
-                        cx.shared.ctrl_producer.lock(|ctrl_producer| {
-                            debug_assert!(
-                                kiibohd_usb::enqueue_ctrl_event(cap_run, ctrl_producer).is_ok(),
-                                "CTRL_QUEUE_SIZE too small"
-                            );
-                        })
+                        debug_assert!(
+                            kiibohd_usb::enqueue_ctrl_event(cap_run, cx.local.ctrl_producer)
+                                .is_ok(),
+                            "CTRL_QUEUE_SIZE too small"
+                        );
                     }
                     /*
                     kll_core::CapabilityRun::McuFlashMode { .. } => {}
@@ -596,126 +675,122 @@ mod app {
     /// USB Outgoing Events Task
     /// Sends outgoing USB HID events generated by the macro_process task
     /// Has a lower priority than keyscanning to schedule around it.
-    #[task(priority = 11, shared = [usb_hid, usb_dev])]
+    #[task(priority = 11, shared = [
+        usb_dev,
+        usb_hid,
+    ])]
     fn usb_process(cx: usb_process::Context) {
-        let mut usb_dev = cx.shared.usb_dev;
-        let mut usb_hid = cx.shared.usb_hid;
-        usb_hid.lock(|usb_hid| {
+        let usb_dev = cx.shared.usb_dev;
+        let usb_hid = cx.shared.usb_hid;
+        (usb_hid, usb_dev).lock(|usb_hid, usb_dev| {
             // Update USB events
             if usb_hid.update() {
-                usb_dev.lock(|usb_dev| {
-                    defmt::trace!("Device State: {:?}", usb_dev.state());
-                    match usb_dev.state() {
-                        UsbDeviceState::Suspend => {
-                            // Issue USB Resume if enabled
-                            if usb_dev.remote_wakeup_enabled() {
-                                usb_dev.bus().remote_wakeup();
-                            }
+                match usb_dev.state() {
+                    UsbDeviceState::Suspend => {
+                        // Issue USB Resume if enabled
+                        if usb_dev.remote_wakeup_enabled() {
+                            usb_dev.bus().remote_wakeup();
                         }
-
-                        UsbDeviceState::Configured => {
-                            // Commit USB events
-                            while usb_hid.push().is_err() {}
-                        }
-
-                        _ => {}
                     }
-                });
+
+                    UsbDeviceState::Configured => {
+                        // Commit USB events
+                        while usb_hid.push().is_err() {}
+                    }
+
+                    _ => {}
+                }
             }
         });
     }
 
     /// ADC Interrupt
-    #[task(priority = 14, binds = ADC, shared = [adc, hidio_intf, layer_state, matrix])]
+    #[task(priority = 14, binds = ADC, shared = [
+        adc,
+        hidio_intf,
+        layer_state,
+        matrix,
+    ])]
     fn adc(mut cx: adc::Context) {
-        let mut adc = cx.shared.adc;
-        let mut matrix = cx.shared.matrix;
-        let mut layer_state = cx.shared.layer_state;
+        let adc = cx.shared.adc;
+        let matrix = cx.shared.matrix;
+        let layer_state = cx.shared.layer_state;
 
-        adc.lock(|adc_pdc| {
+        (adc, layer_state, matrix).lock(|adc_pdc, layer_state, matrix| {
             // Retrieve DMA buffer
             let (buf, adc) = adc_pdc.take().unwrap().wait();
             //defmt::trace!("DMA BUF: {}", buf);
 
-            matrix.lock(|matrix| {
-                layer_state.lock(|layer_state| {
-                    // Current strobe
-                    let strobe = matrix.strobe();
+            // Current strobe
+            let strobe = matrix.strobe();
 
-                    // Process retrieved ADC buffer
-                    // Loop through buffer. The buffer may have multiple buffers for each key.
-                    // For example, 12 entries + 6 rows, column 1:
-                    //  Col Row Sample: Entry
-                    //    1   0      0  6 * 1 + 0 = 6
-                    //    1   1      1  6 * 1 + 1 = 7
-                    //    1   2      2  6 * 1 + 2 = 8
-                    //    1   3      3  6 * 1 + 3 = 9
-                    //    1   4      4  6 * 1 + 4 = 10
-                    //    1   5      5  6 * 1 + 5 = 11
-                    //    1   0      6  6 * 1 + 0 = 6
-                    //    1   1      7  6 * 1 + 1 = 7
-                    //    1   2      8  6 * 1 + 2 = 8
-                    //    0   3      9  6 * 1 + 3 = 9
-                    //    0   4     10  6 * 1 + 4 = 10
-                    //    0   5     11  6 * 1 + 5 = 11
-                    for (i, sample) in buf.iter().enumerate() {
-                        let index = RSIZE * strobe + i - (i / RSIZE) * RSIZE;
-                        match matrix.record::<ADC_SAMPLES>(index, *sample) {
-                            Ok(val) => {
-                                // If data bucket has accumulated enough samples, pass to the next stage
-                                if let Some(sense) = val {
-                                    for event in sense
-                                        .trigger_event(SWITCH_REMAP[index as usize] as usize, false)
+            // Process retrieved ADC buffer
+            // Loop through buffer. The buffer may have multiple buffers for each key.
+            // For example, 12 entries + 6 rows, column 1:
+            //  Col Row Sample: Entry
+            //    1   0      0  6 * 1 + 0 = 6
+            //    1   1      1  6 * 1 + 1 = 7
+            //    1   2      2  6 * 1 + 2 = 8
+            //    1   3      3  6 * 1 + 3 = 9
+            //    1   4      4  6 * 1 + 4 = 10
+            //    1   5      5  6 * 1 + 5 = 11
+            //    1   0      6  6 * 1 + 0 = 6
+            //    1   1      7  6 * 1 + 1 = 7
+            //    1   2      8  6 * 1 + 2 = 8
+            //    0   3      9  6 * 1 + 3 = 9
+            //    0   4     10  6 * 1 + 4 = 10
+            //    0   5     11  6 * 1 + 5 = 11
+            for (i, sample) in buf.iter().enumerate() {
+                let index = RSIZE * strobe + i - (i / RSIZE) * RSIZE;
+                match matrix.record::<ADC_SAMPLES>(index, *sample) {
+                    Ok(val) => {
+                        // If data bucket has accumulated enough samples, pass to the next stage
+                        if let Some(sense) = val {
+                            for event in
+                                sense.trigger_event(SWITCH_REMAP[index as usize] as usize, false)
+                            {
+                                let hidio_event = HidIoEvent::TriggerEvent(event);
+
+                                // Enqueue KLL trigger event
+                                let ret =
+                                    layer_state.process_trigger::<MAX_LAYER_LOOKUP_SIZE>(event);
+                                assert!(ret.is_ok(), "Failed to enqueue: {:?} - {:?}", event, ret);
+
+                                /* TODO - Logs too noisy currently
+                                // Enqueue HID-IO trigger event
+                                cx.shared.hidio_intf.lock(|hidio_intf| {
+                                    if let Err(err) = hidio_intf.process_event(hidio_event)
                                     {
-                                        let hidio_event = HidIoEvent::TriggerEvent(event);
-
-                                        // Enqueue KLL trigger event
-                                        let ret = layer_state
-                                            .process_trigger::<MAX_LAYER_LOOKUP_SIZE>(event);
-                                        assert!(
-                                            ret.is_ok(),
-                                            "Failed to enqueue: {:?} - {:?}",
-                                            event,
-                                            ret
+                                        defmt::error!(
+                                            "Hidio TriggerEvent Error: {:?}",
+                                            err
                                         );
-
-                                        /* TODO - Logs too noisy currently
-                                        // Enqueue HID-IO trigger event
-                                        cx.shared.hidio_intf.lock(|hidio_intf| {
-                                            if let Err(err) = hidio_intf.process_event(hidio_event)
-                                            {
-                                                defmt::error!(
-                                                    "Hidio TriggerEvent Error: {:?}",
-                                                    err
-                                                );
-                                            }
-                                        });
-                                        */
                                     }
-                                }
-                            }
-                            Err(e) => {
-                                defmt::error!(
-                                    "Sample record failed ({}, {}, {}):{} -> {}",
-                                    i,
-                                    strobe,
-                                    index,
-                                    sample,
-                                    e
-                                );
+                                });
+                                */
                             }
                         }
                     }
+                    Err(e) => {
+                        defmt::error!(
+                            "Sample record failed ({}, {}, {}):{} -> {}",
+                            i,
+                            strobe,
+                            index,
+                            sample,
+                            e
+                        );
+                    }
+                }
+            }
 
-                    // Strobe next column
-                    if let Ok(strobe) = matrix.next_strobe() {
-                        // On strobe wrap-around, schedule event processing
-                        if strobe == 0 && macro_process::spawn().is_err() {
-                            defmt::warn!("Could not schedule macro_process");
-                        }
-                    }
-                });
-            });
+            // Strobe next column
+            if let Ok(strobe) = matrix.next_strobe() {
+                // On strobe wrap-around, schedule event processing
+                if strobe == 0 && macro_process::spawn().is_err() {
+                    defmt::warn!("Could not schedule macro_process");
+                }
+            }
 
             // Prepare next DMA read, but don't start it yet
             adc_pdc.replace(adc.read_paused(buf));
@@ -723,58 +798,59 @@ mod app {
     }
 
     /// SPI Interrupt
-    #[task(priority = 12, binds = SPI, shared = [issi, spi, spi_rxtx])]
-    fn spi(mut cx: spi::Context) {
-        let mut issi = cx.shared.issi;
-        let mut spi_rxtx = cx.shared.spi_rxtx;
+    #[task(priority = 12, binds = SPI, shared = [
+        issi,
+        spi,
+        spi_rxtx,
+    ])]
+    fn spi(cx: spi::Context) {
+        let issi = cx.shared.issi;
+        let spi_periph = cx.shared.spi;
+        let spi_rxtx = cx.shared.spi_rxtx;
 
-        spi_rxtx.lock(|spi_rxtx| {
+        (spi_periph, spi_rxtx, issi).lock(|spi_periph, spi_rxtx, issi| {
             // Retrieve DMA buffer
             if let Some(spi_buf) = spi_rxtx.take() {
                 let ((rx_buf, tx_buf), spi) = spi_buf.wait();
 
-                issi.lock(|issi| {
-                    // Process Rx buffer if applicable
-                    issi.rx_function(rx_buf).unwrap();
+                // Process Rx buffer if applicable
+                issi.rx_function(rx_buf).unwrap();
 
-                    // Prepare the next DMA transaction
-                    if let Ok((rx_len, tx_len)) = issi.tx_function(tx_buf) {
-                        spi_rxtx.replace(spi.read_write_len(rx_buf, rx_len, tx_buf, tx_len));
-                    } else {
-                        // Disable PDC
-                        let mut spi = spi.revert();
-                        spi.disable_txbufe_interrupt();
+                // Prepare the next DMA transaction
+                if let Ok((rx_len, tx_len)) = issi.tx_function(tx_buf) {
+                    spi_rxtx.replace(spi.read_write_len(rx_buf, rx_len, tx_buf, tx_len));
+                } else {
+                    // Disable PDC
+                    let mut spi = spi.revert();
+                    spi.disable_txbufe_interrupt();
 
-                        // No more transactions ready, park spi peripheral and buffers
-                        cx.shared.spi.lock(|spi_periph| {
-                            spi_periph.replace((spi, rx_buf, tx_buf));
-                        });
-                    }
-                });
+                    // No more transactions ready, park spi peripheral and buffers
+                    spi_periph.replace((spi, rx_buf, tx_buf));
+                }
             }
         });
     }
 
     /// USB Device Interupt
-    #[task(priority = 14, binds = UDP, shared = [hidio_intf, usb_dev, usb_hid])]
+    #[task(priority = 14, binds = UDP, shared = [
+        hidio_intf,
+        usb_dev,
+        usb_hid,
+    ])]
     fn udp(cx: udp::Context) {
-        let mut usb_dev = cx.shared.usb_dev;
-        let mut usb_hid = cx.shared.usb_hid;
-        let mut hidio_intf = cx.shared.hidio_intf;
+        let usb_dev = cx.shared.usb_dev;
+        let usb_hid = cx.shared.usb_hid;
+        let hidio_intf = cx.shared.hidio_intf;
 
         // Poll USB endpoints
-        usb_dev.lock(|usb_dev| {
-            usb_hid.lock(|usb_hid| {
-                hidio_intf.lock(|hidio_intf| {
-                    if usb_dev.poll(&mut usb_hid.interfaces()) {
-                        // Retrive HID Lock LED events
-                        usb_hid.pull();
+        (usb_dev, usb_hid, hidio_intf).lock(|usb_dev, usb_hid, hidio_intf| {
+            if usb_dev.poll(&mut usb_hid.interfaces()) {
+                // Retrive HID Lock LED events
+                usb_hid.pull();
 
-                        // Process HID-IO
-                        usb_hid.poll(hidio_intf);
-                    }
-                });
-            });
+                // Process HID-IO
+                usb_hid.poll(hidio_intf);
+            }
         });
     }
 }
@@ -784,12 +860,9 @@ unsafe fn HardFault(_ef: &cortex_m_rt::ExceptionFrame) -> ! {
     panic!("HardFault!");
 }
 
-// Timestamps currently use the cycle counter
-// TODO: Use something better and easier to read? (but still fast)
-defmt::timestamp!("{=u32} us", {
-    // TODO (HaaTa): Determine a way to calculate the divider automatically
-    //               Or transition to a hardware timer?
-    cortex_m::peripheral::DWT::cycle_count() / 120
+defmt::timestamp!("{=u64} us", {
+    atsam4_hal::timer::DwtTimer::<{ constants::MCU_FREQ }>::now()
+        / ((constants::MCU_FREQ / 1_000_000) as u64)
 });
 
 // same panicking *behavior* as `panic-probe` but doesn't print a panic message

@@ -20,12 +20,13 @@ use cortex_m_rt::exception;
 // software tasks.
 #[rtic::app(device = gemini::hal::pac, peripherals = true, dispatchers = [UART1, USART0, USART1, SSC, PWM, ACC, ADC, SPI])]
 mod app {
-    use core::convert::Infallible;
-    use core::fmt::Write;
     use crate::constants::*;
     use crate::hidio::*;
-    use heapless::String;
+    use core::convert::Infallible;
+    use core::fmt::Write;
+    use dwt_systick_monotonic::*;
     use heapless::spsc::{Consumer, Producer, Queue};
+    use heapless::String;
     use kiibohd_hid_io::*;
     use kiibohd_usb::HidCountryCode;
 
@@ -37,9 +38,7 @@ mod app {
             gpio::*,
             pac::TC0,
             prelude::*,
-            rtt::RealTimeTimer,
-            time::duration::Extensions,
-            timer::{ClockSource, TimerCounter, TimerCounterChannel},
+            timer::{TimerCounter, TimerCounterChannel, TimerCounterChannels},
             udp::{
                 usb_device,
                 usb_device::{
@@ -95,7 +94,11 @@ mod app {
         MAX_OFF_STATE_LOOKUP,
     >;
 
+    type RealTimeTimer = gemini::hal::rtt::RealTimeTimer<RTT_PRESCALER, false>;
     type UsbDevice = usb_device::device::UsbDevice<'static, UdpBus>;
+
+    #[monotonic(binds = SysTick, default = true)]
+    type DwtMono = DwtSystick<MCU_FREQ>;
 
     // ----- Structs -----
 
@@ -104,26 +107,29 @@ mod app {
     //
     #[shared]
     struct Shared {
-        ctrl_producer: Producer<'static, kiibohd_usb::CtrlState, CTRL_QUEUE_SIZE>,
-        debug_led: Pb0<Output<PushPull>>,
         hidio_intf: HidioCommandInterface,
-        kbd_led_consumer: Consumer<'static, kiibohd_usb::LedState, KBD_LED_QUEUE_SIZE>,
-        kbd_producer: Producer<'static, kiibohd_usb::KeyState, KBD_QUEUE_SIZE>,
         layer_state: LayerState,
         matrix: Matrix,
-        mouse_producer: Producer<'static, kiibohd_usb::MouseState, MOUSE_QUEUE_SIZE>,
-        rtt: RealTimeTimer,
-        tcc0: TimerCounterChannel<TC0, 0>,
         usb_dev: UsbDevice,
         usb_hid: HidInterface,
-        wdt: Watchdog,
     }
 
     //
-    // Local resources, static mut variables
+    // Local resources, static mut variables, no locking necessary
+    // (e.g. can be initialized in init and used in 1 other task function)
     //
     #[local]
-    struct Local {}
+    struct Local {
+        ctrl_producer: Producer<'static, kiibohd_usb::CtrlState, CTRL_QUEUE_SIZE>,
+        debug_led: Pb0<Output<PushPull>>,
+        kbd_led_consumer: Consumer<'static, kiibohd_usb::LedState, KBD_LED_QUEUE_SIZE>,
+        kbd_producer: Producer<'static, kiibohd_usb::KeyState, KBD_QUEUE_SIZE>,
+        mouse_producer: Producer<'static, kiibohd_usb::MouseState, MOUSE_QUEUE_SIZE>,
+        rtt: RealTimeTimer,
+        tcc0: TimerCounterChannel<TC0, 0, TCC0_FREQ>,
+        tcc1: TimerCounterChannel<TC0, 1, TCC1_FREQ>,
+        wdt: Watchdog,
+    }
 
     //
     // Initialization
@@ -146,10 +152,6 @@ mod app {
         //TODO - cortex-m-rt v0.8 set-sp feature
         //let sp = 0x20020000;
         //unsafe { asm!("msr MSP, {}", in(reg) sp) };
-
-        // Initialize (enable) the monotonic timer (CYCCNT)
-        cx.core.DCB.enable_trace();
-        cx.core.DWT.enable_cycle_counter();
 
         defmt::info!(">>>> Initializing <<<<");
 
@@ -303,50 +305,75 @@ mod app {
             cx.device.TC0,
             clocks.peripheral_clocks.tc_0.into_enabled_clock(),
         );
-        let tc0_chs = tc0.split();
+        let tc0_chs: TimerCounterChannels<TC0, TCC0_FREQ, TCC1_FREQ, TCC2_FREQ> = tc0.split();
+
+        // Keyscanning Timer
         let mut tcc0 = tc0_chs.ch0;
-        tcc0.clock_input(ClockSource::MckDiv128);
-        tcc0.start((SCAN_PERIOD_US * 1000).nanoseconds());
-        defmt::trace!("TCC0 started");
+        tcc0.clock_input(TCC0_DIV);
+        tcc0.start((SCAN_PERIOD_US * 1000).nanos());
+        defmt::trace!("TCC0 started - Keyscanning");
         tcc0.enable_interrupt();
 
+        // LED Frame Timer
+        let mut tcc1 = tc0_chs.ch1;
+        tcc1.clock_input(TCC1_DIV);
+        tcc1.start(17_u32.millis()); // 17 ms -> ~60 fps (16.6667 ms)
+        defmt::trace!("TCC1 started - LED Frame Scheduling");
+        tcc1.enable_interrupt();
+
         // Setup secondary timer (used for watchdog, activity led and sleep related functionality)
-        let mut rtt = RealTimeTimer::new(cx.device.RTT, 3, false);
-        rtt.start(500_000u32.microseconds());
+        let mut rtt = RealTimeTimer::new(cx.device.RTT);
+        rtt.start(500_u32.millis());
         rtt.enable_alarm_interrupt();
         defmt::trace!("RTT Timer started");
 
+        // Initialize tickless monotonic timer
+        let mono = DwtSystick::new(&mut cx.core.DCB, cx.core.DWT, cx.core.SYST, MCU_FREQ);
+        defmt::trace!("DwtSystick (Monotonic) started");
+
         (
             Shared {
-                ctrl_producer,
-                debug_led: pins.debug_led,
                 hidio_intf,
-                kbd_led_consumer,
-                kbd_producer,
                 layer_state,
                 matrix,
+                usb_dev,
+                usb_hid,
+            },
+            Local {
+                ctrl_producer,
+                debug_led: pins.debug_led,
+                kbd_led_consumer,
+                kbd_producer,
                 mouse_producer,
                 rtt,
                 tcc0,
-                usb_dev,
-                usb_hid,
+                tcc1,
                 wdt,
             },
-            Local {},
-            init::Monotonics {},
+            init::Monotonics(mono),
         )
     }
 
-    /// Keyscanning Task (Uses TC0)
-    /// High-priority scheduled tasks as consistency is more important than speed for scanning
-    /// key states
-    /// Scans one strobe at a time
-    #[task(priority = 13, binds = TC0, shared = [hidio_intf, layer_state, matrix, tcc0])]
+    /// Timer task (TC0)
+    /// - Keyscanning Task (Uses tcc0)
+    ///   High-priority scheduled tasks as consistency is more important than speed for scanning
+    ///   key states
+    ///   Scans one strobe at a time
+    /// - LED frame scheduling (Uses tcc1)
+    ///   Schedules a lower priority task which is skipped if the previous frame is still
+    ///   processing
+    #[task(priority = 13, binds = TC0, local = [
+        tcc0,
+        tcc1,
+    ], shared = [
+        hidio_intf,
+        layer_state,
+        matrix,
+    ])]
     fn tc0(mut cx: tc0::Context) {
-        cx.shared.tcc0.lock(|w| w.clear_interrupt_flags());
-
-        let process_macros = cx.shared.matrix.lock(|matrix| {
-            cx.shared.layer_state.lock(|layer_state| {
+        // Check for keyscanning interrupt (tcc0)
+        (cx.shared.layer_state, cx.shared.matrix).lock(|layer_state, matrix| {
+            if cx.local.tcc0.clear_interrupt_flags() {
                 // Scan one strobe (strobes have already been enabled and allowed to settle)
                 if let Ok((reading, strobe)) = matrix.sense::<Infallible>() {
                     for (i, entry) in reading.iter().enumerate() {
@@ -375,47 +402,78 @@ mod app {
                 }
 
                 // Strobe next column
-                matrix.next_strobe::<Infallible>().unwrap() == 0
-            })
+                let process_macros = matrix.next_strobe::<Infallible>().unwrap() == 0;
+
+                // If a full matrix scanning cycle has finished, process macros
+                if process_macros && macro_process::spawn().is_err() {
+                    defmt::warn!("Could not schedule macro_process");
+                }
+            }
         });
 
-        // If a full matrix scanning cycle has finished, process macros
-        if process_macros && macro_process::spawn().is_err() {
-            defmt::warn!("Could not schedule macro_process");
+        // Check for LED frame scheduling interrupt
+        if cx.local.tcc1.clear_interrupt_flags() {
+            // Attempt to schedule LED frame
+            if led_frame_process::spawn().is_err() {
+                defmt::warn!("Unable to schedule frame...FPS unstable");
+            }
         }
     }
 
     /// Activity tick
     /// Used visually determine MCU status
-    #[task(priority = 1, binds = RTT, shared = [debug_led, rtt, wdt])]
-    fn rtt(mut cx: rtt::Context) {
-        cx.shared.rtt.lock(|w| w.clear_interrupt_flags());
+    #[task(priority = 1, binds = RTT, local = [
+        debug_led,
+        rtt,
+        wdt,
+    ], shared = [])]
+    fn rtt(cx: rtt::Context) {
+        cx.local.rtt.clear_interrupt_flags();
 
         // Feed watchdog
-        cx.shared.wdt.lock(|w| w.feed());
+        cx.local.wdt.feed();
 
         // Blink debug led
         // TODO: Remove (or use feature flag)
-        cx.shared.debug_led.lock(|w| w.toggle().ok());
+        cx.local.debug_led.toggle().ok();
+    }
+
+    /// LED Frame Processing Task
+    /// Handles each LED frame, triggered at a constant rate.
+    /// Frames are skipped if the previous frame is still processing.
+    #[task(priority = 8, shared = [
+        hidio_intf,
+    ])]
+    fn led_frame_process(mut cx: led_frame_process::Context) {
+        cx.shared.hidio_intf.lock(|_hidio_intf| {
+            // TODO
+        });
+
+        // Handle processing of "next" frame
+        // If this takes too long, the next frame update won't be scheduled (i.e. it'll be
+        // skipped).
+        // TODO - KLL Pixelmap
+        // TODO - HIDIO frame updates
     }
 
     /// Macro Processing Task
     /// Handles incoming key scan triggers and turns them into results (actions and hid events)
     /// Has a lower priority than keyscanning to schedule around it.
-    #[task(priority = 10, shared = [
+    #[task(priority = 10, local = [
         ctrl_producer,
-        hidio_intf,
         kbd_led_consumer,
         kbd_producer,
+        mouse_producer,
+    ], shared = [
+        hidio_intf,
         layer_state,
         matrix,
-        mouse_producer,
     ])]
     fn macro_process(mut cx: macro_process::Context) {
-        cx.shared.layer_state.lock(|layer_state| {
+        (cx.shared.layer_state, cx.shared.matrix).lock(|layer_state, matrix| {
             // Query HID LED Events
-            cx.shared.kbd_led_consumer.lock(|kbd_led_consumer| {
-                while let Some(state) = kbd_led_consumer.dequeue() {
+            cx.shared.hidio_intf.lock(|hidio_intf| {
+                while let Some(state) = cx.local.kbd_led_consumer.dequeue() {
                     // Convert to a TriggerEvent
                     let event = state.trigger_event();
                     let hidio_event = HidIoEvent::TriggerEvent(event);
@@ -425,22 +483,18 @@ mod app {
                     debug_assert!(ret.is_ok(), "Failed to enqueue: {:?} - {:?}", event, ret);
 
                     // Enqueue HID-IO trigger event
-                    cx.shared.hidio_intf.lock(|hidio_intf| {
-                        if let Err(err) = hidio_intf.process_event(hidio_event) {
-                            defmt::error!("Hidio TriggerEvent Error: {:?}", err);
-                        }
-                    });
+                    if let Err(err) = hidio_intf.process_event(hidio_event) {
+                        defmt::error!("Hidio TriggerEvent Error: {:?}", err);
+                    }
                 }
             });
 
             // Confirm off-state lookups
-            cx.shared.matrix.lock(|matrix| {
-                layer_state.process_off_state_lookups::<MAX_LAYER_LOOKUP_SIZE>(&|index| {
-                    matrix
-                        .generate_event(index)
-                        .unwrap()
-                        .trigger_event(index, false)
-                });
+            layer_state.process_off_state_lookups::<MAX_LAYER_LOOKUP_SIZE>(&|index| {
+                matrix
+                    .generate_event(index)
+                    .unwrap()
+                    .trigger_event(index, false)
             });
 
             // Finalize triggers to generate CapabilityRun events
@@ -449,22 +503,20 @@ mod app {
                     kll_core::CapabilityRun::NoOp { .. } => {}
                     kll_core::CapabilityRun::HidKeyboard { .. }
                     | kll_core::CapabilityRun::HidKeyboardState { .. } => {
-                        cx.shared.kbd_producer.lock(|kbd_producer| {
-                            debug_assert!(
-                                kiibohd_usb::enqueue_keyboard_event(cap_run, kbd_producer).is_ok(),
-                                "KBD_QUEUE_SIZE too small"
-                            );
-                        })
+                        debug_assert!(
+                            kiibohd_usb::enqueue_keyboard_event(cap_run, cx.local.kbd_producer)
+                                .is_ok(),
+                            "KBD_QUEUE_SIZE too small"
+                        );
                     }
                     kll_core::CapabilityRun::HidProtocol { .. } => {}
                     kll_core::CapabilityRun::HidConsumerControl { .. }
                     | kll_core::CapabilityRun::HidSystemControl { .. } => {
-                        cx.shared.ctrl_producer.lock(|ctrl_producer| {
-                            debug_assert!(
-                                kiibohd_usb::enqueue_ctrl_event(cap_run, ctrl_producer).is_ok(),
-                                "CTRL_QUEUE_SIZE too small"
-                            );
-                        })
+                        debug_assert!(
+                            kiibohd_usb::enqueue_ctrl_event(cap_run, cx.local.ctrl_producer)
+                                .is_ok(),
+                            "CTRL_QUEUE_SIZE too small"
+                        );
                     }
                     /*
                     kll_core::CapabilityRun::McuFlashMode { .. } => {}
@@ -494,31 +546,31 @@ mod app {
     /// USB Outgoing Events Task
     /// Sends outgoing USB HID events generated by the macro_process task
     /// Has a lower priority than keyscanning to schedule around it.
-    #[task(priority = 11, shared = [usb_hid, usb_dev])]
+    #[task(priority = 11, shared = [
+        usb_dev,
+        usb_hid,
+    ])]
     fn usb_process(cx: usb_process::Context) {
-        let mut usb_dev = cx.shared.usb_dev;
-        let mut usb_hid = cx.shared.usb_hid;
-        usb_hid.lock(|usb_hid| {
+        let usb_dev = cx.shared.usb_dev;
+        let usb_hid = cx.shared.usb_hid;
+        (usb_hid, usb_dev).lock(|usb_hid, usb_dev| {
             // Update USB events
             if usb_hid.update() {
-                usb_dev.lock(|usb_dev| {
-                    defmt::trace!("Device State: {:?}", usb_dev.state());
-                    match usb_dev.state() {
-                        UsbDeviceState::Suspend => {
-                            // Issue USB Resume if enabled
-                            if usb_dev.remote_wakeup_enabled() {
-                                usb_dev.bus().remote_wakeup();
-                            }
+                match usb_dev.state() {
+                    UsbDeviceState::Suspend => {
+                        // Issue USB Resume if enabled
+                        if usb_dev.remote_wakeup_enabled() {
+                            usb_dev.bus().remote_wakeup();
                         }
-
-                        UsbDeviceState::Configured => {
-                            // Commit USB events
-                            while usb_hid.push().is_err() {}
-                        }
-
-                        _ => {}
                     }
-                });
+
+                    UsbDeviceState::Configured => {
+                        // Commit USB events
+                        while usb_hid.push().is_err() {}
+                    }
+
+                    _ => {}
+                }
             }
         });
     }
@@ -534,25 +586,25 @@ mod app {
     fn twi1(_: twi1::Context) {}
 
     /// USB Device Interupt
-    #[task(priority = 14, binds = UDP, shared = [hidio_intf, usb_dev, usb_hid])]
+    #[task(priority = 14, binds = UDP, shared = [
+        hidio_intf,
+        usb_dev,
+        usb_hid,
+    ])]
     fn udp(cx: udp::Context) {
-        let mut usb_dev = cx.shared.usb_dev;
-        let mut usb_hid = cx.shared.usb_hid;
-        let mut hidio_intf = cx.shared.hidio_intf;
+        let usb_dev = cx.shared.usb_dev;
+        let usb_hid = cx.shared.usb_hid;
+        let hidio_intf = cx.shared.hidio_intf;
 
         // Poll USB endpoints
-        usb_dev.lock(|usb_dev| {
-            usb_hid.lock(|usb_hid| {
-                hidio_intf.lock(|hidio_intf| {
-                    if usb_dev.poll(&mut usb_hid.interfaces()) {
-                        // Retrive HID Lock LED events
-                        usb_hid.pull();
+        (usb_dev, usb_hid, hidio_intf).lock(|usb_dev, usb_hid, hidio_intf| {
+            if usb_dev.poll(&mut usb_hid.interfaces()) {
+                // Retrive HID Lock LED events
+                usb_hid.pull();
 
-                        // Process HID-IO
-                        usb_hid.poll(hidio_intf);
-                    }
-                });
-            });
+                // Process HID-IO
+                usb_hid.poll(hidio_intf);
+            }
         });
     }
 }
@@ -562,12 +614,9 @@ unsafe fn HardFault(_ef: &cortex_m_rt::ExceptionFrame) -> ! {
     panic!("HardFault!");
 }
 
-// Timestamps currently use the cycle counter
-// TODO: Use something better and easier to read? (but still fast)
-defmt::timestamp!("{=u32} us", {
-    // TODO (HaaTa): Determine a way to calculate the divider automatically
-    //               Or transition to a hardware timer?
-    cortex_m::peripheral::DWT::cycle_count() / 120
+defmt::timestamp!("{=u64} us", {
+    atsam4_hal::timer::DwtTimer::<{ constants::MCU_FREQ }>::now()
+        / ((constants::MCU_FREQ / 1_000_000) as u64)
 });
 
 // same panicking *behavior* as `panic-probe` but doesn't print a panic message

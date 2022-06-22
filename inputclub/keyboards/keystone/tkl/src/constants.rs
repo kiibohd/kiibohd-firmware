@@ -5,6 +5,7 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+use atsam4_hal::timer::ClockSource;
 use const_env::from_env;
 
 // ----- Flash Config -----
@@ -16,6 +17,19 @@ extern "C" {
 }
 
 // ----- Constants -----
+
+// General clock frequencies
+pub const MCU_FREQ: u32 = 120_000_000;
+
+// RTT frequency calculations
+pub const RTT_PRESCALER: usize = 4; // Most accurate than evenly counts seconds
+
+// Timer frequency calculations
+pub const TCC0_DIV: ClockSource = ClockSource::MckDiv128;
+pub const TCC0_FREQ: u32 = MCU_FREQ / TCC0_DIV.div();
+pub const TCC1_DIV: ClockSource = ClockSource::MckDiv128;
+pub const TCC1_FREQ: u32 = MCU_FREQ / TCC1_DIV.div();
+pub const TCC2_FREQ: u32 = TCC1_FREQ;
 
 pub const BUF_CHUNK: usize = 64;
 pub const ID_LEN: usize = 10;
