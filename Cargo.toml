@@ -13,6 +13,7 @@ kiibohd-hall-effect-keyscanning = { path = "../kiibohd-core/kiibohd-hall-effect-
 kiibohd-usb = { path = "../kiibohd-core/kiibohd-usb" }
 kiibohd-hid-io = { path = "../kiibohd-core/kiibohd-hid-io" }
 hid-io-protocol = { path = "../hid-io-protocol" }
+is31fl3743b = { path = "../kiibohd-core/is31fl3743b" }
 usb-device = { path = "../usb-device" }
 
 [patch."https://github.com/haata/usb-device.git"]

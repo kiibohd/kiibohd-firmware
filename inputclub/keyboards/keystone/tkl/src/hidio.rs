@@ -139,13 +139,13 @@ impl<const H: usize> KiibohdCommandInterface<H> for HidioInterface<H> {
                     // Enables pass/fail test
                     // Sends data using h0051
                     0x0001 => {
-                        self.manufacturing_config.hall_pass_fail_test = false;
+                        self.manufacturing_config.hall_pass_fail_test = true;
                         Ok(h0050::Ack {})
                     }
                     // Enables level check mode
                     // Sends data using h0051
                     0x0002 => {
-                        self.manufacturing_config.hall_level_check = false;
+                        self.manufacturing_config.hall_level_check = true;
                         Ok(h0050::Ack {})
                     }
                     _ => Err(h0050::Nak {}),
