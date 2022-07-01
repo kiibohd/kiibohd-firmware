@@ -547,7 +547,7 @@ mod app {
 
         // Blink debug led
         // TODO: Remove (or use feature flag)
-        cx.local.debug_led.toggle().ok();
+        //cx.local.debug_led.toggle().ok();
     }
 
     /// LED Frame Processing Task
@@ -570,7 +570,6 @@ mod app {
                         if hidio_intf.interface().manufacturing_config.led_short_test {
                             // Enqueue short test
                             issi.short_circuit_detect_setup().unwrap();
-                            defmt::info!("Short circuit test started");
                             *led_test = LedTest::ShortQuery;
                             led_test::spawn_after(800_u32.micros()).unwrap();
 
@@ -641,27 +640,17 @@ mod app {
             |hidio_intf, issi, led_test| {
                 match *led_test {
                     LedTest::ShortQuery => {
-                        // TODO REMOVEME
-                        defmt::info!(
-                            "1Manufacturing Info: {:?}",
-                            hidio_intf.interface().manufacturing_config
-                        );
                         // Schedule read of the short test results
                         issi.short_circuit_detect_read().unwrap();
                         *led_test = LedTest::ShortReady;
                         // NOTE: This should be quick, but we don't want to poll
-                        led_test::spawn_after(500_u32.micros()).unwrap();
+                        led_test::spawn_after(2_u32.millis()).unwrap();
+                        led_frame_process::spawn().ok(); // Attempt to schedule frame earlier
                     }
                     LedTest::ShortReady => {
                         // Read short results
                         let short_results = issi.short_circuit_raw().unwrap();
 
-                        // TODO REMOVEME
-                        defmt::info!(
-                            "2Manufacturing Info: {:?} - {:?}",
-                            hidio_intf.interface().manufacturing_config,
-                            short_results,
-                        );
                         // 1 byte id, 1 byte length, 32 bytes of data, 1 byte id, ...
                         // Buffer size defined by kiibohd_hidio
                         let mut data: heapless::Vec<u8, { kiibohd_hid_io::MESSAGE_LEN - 4 }> =
@@ -672,7 +661,6 @@ mod app {
                         data.push(1).unwrap(); // Id
                         data.push(32).unwrap(); // Length
                         data.extend_from_slice(&short_results[1]).unwrap(); // Data
-                        defmt::info!("3Manufacturing Info: {:?}", data,);
                         hidio_intf
                             .h0051_manufacturingres(h0051::Cmd {
                                 command: 0x0003,
@@ -688,18 +676,13 @@ mod app {
                         issi.open_circuit_detect_read().unwrap();
                         *led_test = LedTest::OpenReady;
                         // NOTE: This should be quick, but we don't want to poll
-                        led_test::spawn_after(500_u32.micros()).unwrap();
+                        led_test::spawn_after(2_u32.millis()).unwrap();
+                        led_frame_process::spawn().ok(); // Attempt to schedule frame earlier
                     }
                     LedTest::OpenReady => {
                         // Read short results
                         let open_results = issi.open_circuit_raw().unwrap();
 
-                        // TODO REMOVEME
-                        defmt::info!(
-                            "2Manufacturing Info: {:?} - {:?}",
-                            hidio_intf.interface().manufacturing_config,
-                            open_results,
-                        );
                         // 1 byte id, 1 byte length, 32 bytes of data, 1 byte id, ...
                         // Buffer size defined by kiibohd_hidio
                         let mut data: heapless::Vec<u8, { kiibohd_hid_io::MESSAGE_LEN - 4 }> =
@@ -710,7 +693,6 @@ mod app {
                         data.push(1).unwrap(); // Id
                         data.push(32).unwrap(); // Length
                         data.extend_from_slice(&open_results[1]).unwrap(); // Data
-                        defmt::info!("3Manufacturing Info: {:?}", data,);
                         hidio_intf
                             .h0051_manufacturingres(h0051::Cmd {
                                 command: 0x0003,

@@ -38,7 +38,7 @@ paste = "1.0"
 
 [dependencies.atsam4-hal]
 git = "https://github.com/haata/atsam4-hal.git"
-version = "0.2.0"
+version = "0.2.1"
 default-features = false
 features = ["atsam4s8b", "usb"]
 
