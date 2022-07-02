@@ -633,11 +633,12 @@ mod app {
         hidio_intf,
         issi,
         led_test,
+        usb_hid,
     ])]
     fn led_test(cx: led_test::Context) {
         // Check for test results
-        (cx.shared.hidio_intf, cx.shared.issi, cx.shared.led_test).lock(
-            |hidio_intf, issi, led_test| {
+        (cx.shared.hidio_intf, cx.shared.issi, cx.shared.led_test, cx.shared.usb_hid).lock(
+            |hidio_intf, issi, led_test, usb_hid| {
                 match *led_test {
                     LedTest::ShortQuery => {
                         // Schedule read of the short test results
@@ -663,13 +664,14 @@ mod app {
                         data.extend_from_slice(&short_results[1]).unwrap(); // Data
                         hidio_intf
                             .h0051_manufacturingres(h0051::Cmd {
-                                command: 0x0003,
+                                command: 0x0001,
                                 argument: 0x0002,
                                 data,
                             })
                             .unwrap();
 
                         *led_test = LedTest::Reset;
+                        usb_hid.poll(hidio_intf); // Flush hidio packets
                     }
                     LedTest::OpenQuery => {
                         // Schedule read of the short test results
@@ -695,13 +697,14 @@ mod app {
                         data.extend_from_slice(&open_results[1]).unwrap(); // Data
                         hidio_intf
                             .h0051_manufacturingres(h0051::Cmd {
-                                command: 0x0003,
-                                argument: 0x0002,
+                                command: 0x0001,
+                                argument: 0x0003,
                                 data,
                             })
                             .unwrap();
 
                         *led_test = LedTest::Reset;
+                        usb_hid.poll(hidio_intf); // Flush hidio packets
                     }
                     _ => {}
                 }
