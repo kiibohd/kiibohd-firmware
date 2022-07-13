@@ -158,6 +158,7 @@ mod app {
         debug_led: Pa15<Output<PushPull>>,
         kbd_led_consumer: Consumer<'static, kiibohd_usb::LedState, KBD_LED_QUEUE_SIZE>,
         kbd_producer: Producer<'static, kiibohd_usb::KeyState, KBD_QUEUE_SIZE>,
+        manu_test_data: heapless::Vec<u8, { kiibohd_hid_io::MESSAGE_LEN - 4 }>,
         mouse_producer: Producer<'static, kiibohd_usb::MouseState, MOUSE_QUEUE_SIZE>,
         rtt: RealTimeTimer,
         tcc0: TimerCounterChannel<TC0, Tc0Clock<Enabled>, 0, TCC0_FREQ>,
@@ -465,6 +466,9 @@ mod app {
         let mono = DwtSystick::new(&mut cx.core.DCB, cx.core.DWT, cx.core.SYST, MCU_FREQ);
         defmt::trace!("DwtSystick (Monotonic) started");
 
+        // Manufacturing test data buffer
+        let mut manu_test_data = heapless::Vec::new();
+
         (
             Shared {
                 adc: Some(adc.read(cx.local.adc_buf)),
@@ -483,6 +487,7 @@ mod app {
                 debug_led: pins.debug_led,
                 kbd_led_consumer,
                 kbd_producer,
+                manu_test_data,
                 mouse_producer,
                 rtt,
                 tcc0,
@@ -571,7 +576,8 @@ mod app {
                             // Enqueue short test
                             issi.short_circuit_detect_setup().unwrap();
                             *led_test = LedTest::ShortQuery;
-                            led_test::spawn_after(800_u32.micros()).unwrap();
+                            led_test::spawn_after(2000_u32.micros()).unwrap();
+                            //led_test::spawn_after(800_u32.micros()).unwrap();
 
                             hidio_intf
                                 .mut_interface()
@@ -581,7 +587,8 @@ mod app {
                             // Enqueue open test
                             issi.open_circuit_detect_setup().unwrap();
                             *led_test = LedTest::OpenQuery;
-                            led_test::spawn_after(800_u32.micros()).unwrap();
+                            led_test::spawn_after(2000_u32.micros()).unwrap();
+                            //led_test::spawn_after(800_u32.micros()).unwrap();
 
                             hidio_intf
                                 .mut_interface()
@@ -637,8 +644,13 @@ mod app {
     ])]
     fn led_test(cx: led_test::Context) {
         // Check for test results
-        (cx.shared.hidio_intf, cx.shared.issi, cx.shared.led_test, cx.shared.usb_hid).lock(
-            |hidio_intf, issi, led_test, usb_hid| {
+        (
+            cx.shared.hidio_intf,
+            cx.shared.issi,
+            cx.shared.led_test,
+            cx.shared.usb_hid,
+        )
+            .lock(|hidio_intf, issi, led_test, usb_hid| {
                 match *led_test {
                     LedTest::ShortQuery => {
                         // Schedule read of the short test results
@@ -708,8 +720,7 @@ mod app {
                     }
                     _ => {}
                 }
-            },
-        );
+            });
     }
 
     /// Macro Processing Task
@@ -829,24 +840,35 @@ mod app {
     }
 
     /// ADC Interrupt
-    #[task(priority = 14, binds = ADC, shared = [
+    #[task(priority = 14, binds = ADC, local = [
+        manu_test_data,
+    ], shared = [
         adc,
         hidio_intf,
         layer_state,
         matrix,
+        usb_hid,
     ])]
     fn adc(mut cx: adc::Context) {
         let adc = cx.shared.adc;
-        let matrix = cx.shared.matrix;
+        let hidio_intf = cx.shared.hidio_intf;
         let layer_state = cx.shared.layer_state;
+        let manu_test_data = cx.local.manu_test_data;
+        let matrix = cx.shared.matrix;
 
-        (adc, layer_state, matrix).lock(|adc_pdc, layer_state, matrix| {
+        (adc, hidio_intf, layer_state, matrix).lock(|adc_pdc, hidio_intf, layer_state, matrix| {
             // Retrieve DMA buffer
             let (buf, adc) = adc_pdc.take().unwrap().wait();
             //defmt::trace!("DMA BUF: {}", buf);
 
             // Current strobe
             let strobe = matrix.strobe();
+
+            // Manufacturing test data
+            // Used to accumulate ADC data for manufacturing tests
+            defmt::info!("Size: {} {:?}", manu_test_data.len(), manu_test_data);
+            manu_test_data.push(strobe as u8).unwrap(); // Current strobe in buffer
+            manu_test_data.push(RSIZE as u8).unwrap(); // Size of buffer
 
             // Process retrieved ADC buffer
             // Loop through buffer. The buffer may have multiple buffers for each key.
@@ -870,6 +892,11 @@ mod app {
                     Ok(val) => {
                         // If data bucket has accumulated enough samples, pass to the next stage
                         if let Some(sense) = val {
+                            // Store data for manufacturing test results
+                            manu_test_data
+                                .extend_from_slice(&sense.raw.to_le_bytes())
+                                .unwrap();
+
                             for event in
                                 sense.trigger_event(SWITCH_REMAP[index as usize] as usize, false)
                             {
@@ -882,7 +909,6 @@ mod app {
 
                                 /* TODO - Logs too noisy currently
                                 // Enqueue HID-IO trigger event
-                                cx.shared.hidio_intf.lock(|hidio_intf| {
                                     if let Err(err) = hidio_intf.process_event(hidio_event)
                                     {
                                         defmt::error!(
@@ -890,7 +916,6 @@ mod app {
                                             err
                                         );
                                     }
-                                });
                                 */
                             }
                         }
@@ -911,8 +936,26 @@ mod app {
             // Strobe next column
             if let Ok(strobe) = matrix.next_strobe() {
                 // On strobe wrap-around, schedule event processing
-                if strobe == 0 && macro_process::spawn().is_err() {
-                    defmt::warn!("Could not schedule macro_process");
+                if strobe == 0 {
+                    // If manufacturing test is enabled, send accumulated data
+                    if hidio_intf.interface().manufacturing_config.hall_level_check {
+                        if hidio_intf
+                            .h0051_manufacturingres(h0051::Cmd {
+                                command: 0x0003,
+                                argument: 0x0002,
+                                data: manu_test_data.clone(),
+                            })
+                            .is_ok()
+                        {
+                            cx.shared.usb_hid.lock(|usb_hid| {
+                                usb_hid.poll(hidio_intf); // Flush hidio packets
+                            });
+                        }
+                        manu_test_data.clear();
+                    }
+                    if macro_process::spawn().is_err() {
+                        defmt::warn!("Could not schedule macro_process");
+                    }
                 }
             }
 
