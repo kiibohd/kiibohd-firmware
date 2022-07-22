@@ -52,7 +52,7 @@ mod app {
                 UdpBus,
             },
             watchdog::Watchdog,
-            ToggleableOutputPin,
+            OutputPin, ToggleableOutputPin,
         },
         kll, Pins,
     };
@@ -161,6 +161,7 @@ mod app {
         manu_test_data: heapless::Vec<u8, { kiibohd_hid_io::MESSAGE_LEN - 4 }>,
         mouse_producer: Producer<'static, kiibohd_usb::MouseState, MOUSE_QUEUE_SIZE>,
         rtt: RealTimeTimer,
+        strobe_cycle: u32,
         tcc0: TimerCounterChannel<TC0, Tc0Clock<Enabled>, 0, TCC0_FREQ>,
         tcc1: TimerCounterChannel<TC0, Tc1Clock<Enabled>, 1, TCC1_FREQ>,
         wdt: Watchdog,
@@ -369,6 +370,8 @@ mod app {
         }
         defmt::info!("pwm: {:?}", issi.pwm_page_buf());
         defmt::info!("scaling: {:?}", issi.scaling_page_buf());
+        // Disable ISSI hardware shutdown
+        pins.debug_led.set_high().ok();
 
         // Start ISSI LED Driver initialization
         issi.reset().unwrap(); // Queue reset DMA transaction
@@ -490,6 +493,7 @@ mod app {
                 manu_test_data,
                 mouse_producer,
                 rtt,
+                strobe_cycle: 0,
                 tcc0,
                 tcc1,
                 wdt,
@@ -683,7 +687,6 @@ mod app {
                             .unwrap();
 
                         *led_test = LedTest::Reset;
-                        usb_hid.poll(hidio_intf); // Flush hidio packets
                     }
                     LedTest::OpenQuery => {
                         // Schedule read of the short test results
@@ -716,7 +719,6 @@ mod app {
                             .unwrap();
 
                         *led_test = LedTest::Reset;
-                        usb_hid.poll(hidio_intf); // Flush hidio packets
                     }
                     _ => {}
                 }
@@ -842,6 +844,7 @@ mod app {
     /// ADC Interrupt
     #[task(priority = 14, binds = ADC, local = [
         manu_test_data,
+        strobe_cycle,
     ], shared = [
         adc,
         hidio_intf,
@@ -855,6 +858,9 @@ mod app {
         let layer_state = cx.shared.layer_state;
         let manu_test_data = cx.local.manu_test_data;
         let matrix = cx.shared.matrix;
+        // Determine if we should collect manufacturing data
+        // There is too much data to send after every scan cycle (overwhelms HID-IO and USB)
+        let collect_manu_test = *cx.local.strobe_cycle % 5 == 0;
 
         (adc, hidio_intf, layer_state, matrix).lock(|adc_pdc, hidio_intf, layer_state, matrix| {
             // Retrieve DMA buffer
@@ -866,9 +872,10 @@ mod app {
 
             // Manufacturing test data
             // Used to accumulate ADC data for manufacturing tests
-            defmt::info!("Size: {} {:?}", manu_test_data.len(), manu_test_data);
-            manu_test_data.push(strobe as u8).unwrap(); // Current strobe in buffer
-            manu_test_data.push(RSIZE as u8).unwrap(); // Size of buffer
+            if collect_manu_test {
+                manu_test_data.push(strobe as u8).unwrap(); // Current strobe in buffer
+                manu_test_data.push(RSIZE as u8).unwrap(); // Size of buffer
+            }
 
             // Process retrieved ADC buffer
             // Loop through buffer. The buffer may have multiple buffers for each key.
@@ -893,9 +900,11 @@ mod app {
                         // If data bucket has accumulated enough samples, pass to the next stage
                         if let Some(sense) = val {
                             // Store data for manufacturing test results
-                            manu_test_data
-                                .extend_from_slice(&sense.raw.to_le_bytes())
-                                .unwrap();
+                            if collect_manu_test {
+                                manu_test_data
+                                    .extend_from_slice(&sense.raw.to_le_bytes())
+                                    .unwrap();
+                            }
 
                             for event in
                                 sense.trigger_event(SWITCH_REMAP[index as usize] as usize, false)
@@ -935,8 +944,9 @@ mod app {
 
             // Strobe next column
             if let Ok(strobe) = matrix.next_strobe() {
-                // On strobe wrap-around, schedule event processing
-                if strobe == 0 {
+                // When the manufacturing test buffer is full, send it and clear the buffer
+                if collect_manu_test && manu_test_data.len() + 2 + RSIZE > manu_test_data.capacity()
+                {
                     // If manufacturing test is enabled, send accumulated data
                     if hidio_intf.interface().manufacturing_config.hall_level_check {
                         if hidio_intf
@@ -945,14 +955,19 @@ mod app {
                                 argument: 0x0002,
                                 data: manu_test_data.clone(),
                             })
-                            .is_ok()
+                            .is_err()
                         {
-                            cx.shared.usb_hid.lock(|usb_hid| {
-                                usb_hid.poll(hidio_intf); // Flush hidio packets
-                            });
+                            defmt::warn!("Buffer full, failed to send hall level check data");
                         }
-                        manu_test_data.clear();
                     }
+
+                    // Clear manufacturing test data
+                    manu_test_data.clear();
+                }
+                // On strobe wrap-around, schedule event processing
+                if strobe == 0 {
+                    // Increment strobe cycle
+                    *cx.local.strobe_cycle = cx.local.strobe_cycle.wrapping_add(1);
                     if macro_process::spawn().is_err() {
                         defmt::warn!("Could not schedule macro_process");
                     }
@@ -1016,8 +1031,10 @@ mod app {
                 usb_hid.pull();
 
                 // Process HID-IO
-                usb_hid.poll(hidio_intf);
+                usb_hid.pull_hidio(hidio_intf);
             }
+            // Attempt to tx any HID-IO packets
+            usb_hid.push_hidio(hidio_intf);
         });
     }
 }
